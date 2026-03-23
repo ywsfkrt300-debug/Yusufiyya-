@@ -80,8 +80,7 @@ export default function StatusTab({ localUser, users, getDisplayName }: Props) {
       setIsAddingStatus(false);
       setStatusImageSrc(null);
     } catch (error) {
-      console.error(error);
-      alert('حدث خطأ أثناء رفع الحالة');
+      console.error('Error uploading image status:', error);
     }
   };
 
@@ -101,8 +100,7 @@ export default function StatusTab({ localUser, users, getDisplayName }: Props) {
       setStatusText('');
       setStatusTextColor('#000000');
     } catch (error) {
-      console.error(error);
-      alert('حدث خطأ أثناء رفع الحالة');
+      console.error('Error adding text status:', error);
     }
   };
 
@@ -329,10 +327,8 @@ export default function StatusTab({ localUser, users, getDisplayName }: Props) {
               <button 
                 onClick={async (e) => {
                   e.stopPropagation();
-                  if (confirm('هل أنت متأكد من حذف هذه الحالة؟')) {
-                    await deleteDoc(doc(db, 'statuses', viewingUserStatuses[currentStatusIndex].id));
-                    setViewingUserStatuses(null);
-                  }
+                  await deleteDoc(doc(db, 'statuses', viewingUserStatuses[currentStatusIndex].id));
+                  setViewingUserStatuses(null);
                 }}
                 className="p-2 text-red-500 hover:bg-red-500/20 rounded-full transition-colors backdrop-blur-sm"
               >

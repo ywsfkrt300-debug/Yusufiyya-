@@ -390,7 +390,6 @@ export default function App() {
       setStep('main');
     } catch (error) {
       console.error("Error creating profile:", error);
-      alert("حدث خطأ أثناء إنشاء الحساب.");
     }
   };
 
@@ -413,7 +412,6 @@ export default function App() {
       setEditingContactId(null);
     } catch (error) {
       console.error("Error updating contact name:", error);
-      alert("حدث خطأ أثناء تحديث الاسم");
     }
   };
 
@@ -449,11 +447,10 @@ export default function App() {
         type,
         deletedFor: [],
         read: false,
-        quotedMessageId
+        quotedMessageId: quotedMessageId || null
       });
     } catch (error) {
       console.error("Error sending message:", error);
-      alert("فشل إرسال الرسالة. يرجى المحاولة مرة أخرى.");
     }
   };
 
@@ -491,7 +488,6 @@ export default function App() {
       recordingInterval.current = setInterval(() => setRecordingDuration(prev => prev + 1), 1000);
     } catch (err) {
       console.error("Microphone access denied", err);
-      alert("يرجى السماح بالوصول إلى الميكروفون.");
     }
   };
 

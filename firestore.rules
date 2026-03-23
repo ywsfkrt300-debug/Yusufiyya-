@@ -12,14 +12,12 @@ service cloud.firestore {
       allow read: if true;
       
       // Allow creation/update based on the custom phone ID
-      // Since we bypass Firebase Auth for the demo, we rely on the client ID
       allow create, update: if request.resource.data.uid == userId
         && hasRequiredFields(['uid', 'displayName', 'phoneNumber', 'publicKey']);
     }
 
     match /messages/{messageId} {
       // Allow public read. The content is protected by End-to-End Encryption (RSA+AES).
-      // Even if someone reads the database, they cannot decrypt the messages without the private key stored in IndexedDB.
       allow read: if true;
       
       // Allow sending messages
@@ -29,16 +27,26 @@ service cloud.firestore {
       allow update, delete: if true;
     }
 
+    match /groups/{groupId} {
+      // Allow reading groups if user is a member
+      allow read: if true; // Simplified for demo, but ideally check membership
+      
+      // Allow creating groups
+      allow create: if hasRequiredFields(['name', 'members', 'photoURL', 'createdBy', 'timestamp']);
+      
+      // Allow updating groups
+      allow update: if true;
+    }
+
     match /statuses/{statusId} {
       // Allow public read for statuses
       allow read: if true;
       
-      // Allow creating statuses (must have expiration)
+      // Allow creating statuses
       allow create: if hasRequiredFields(['userId', 'type', 'content', 'timestamp', 'expiresAt']);
       
-      // Allow deleting own statuses (if needed)
-      allow delete: if true;
-      allow update: if true;
+      // Allow deleting and updating statuses
+      allow delete, update: if true;
     }
   }
 }
