@@ -34,6 +34,17 @@
         "expiresAt": { "type": "number", "description": "Unix timestamp in milliseconds for 24h expiration" }
       },
       "required": ["userId", "type", "content", "timestamp", "expiresAt"]
+    },
+    "Group": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "members": { "type": "array", "items": { "type": "string" } },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "photoURL": { "type": "string" }
+      },
+      "required": ["name", "members", "createdBy", "createdAt"]
     }
   },
   "firestore": {
@@ -48,6 +59,10 @@
     "statuses/{statusId}": {
       "schema": "Status",
       "description": "24-hour disappearing statuses (images/text)"
+    },
+    "groups/{groupId}": {
+      "schema": "Group",
+      "description": "Group chat rooms"
     }
   }
 }
