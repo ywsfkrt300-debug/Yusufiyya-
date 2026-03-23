@@ -1,0 +1,21 @@
+{
+  "name": "يوسفية للمحادثات",
+  "short_name": "يوسفية",
+  "description": "تطبيق مراسلة آمن ومشفر تماماً",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#25D366",
+  "icons": [
+    {
+      "src": "https://api.dicebear.com/7.x/avataaars/svg?seed=Youssefia&backgroundColor=25D366",
+      "sizes": "192x192",
+      "type": "image/svg+xml"
+    },
+    {
+      "src": "https://api.dicebear.com/7.x/avataaars/svg?seed=Youssefia&backgroundColor=25D366",
+      "sizes": "512x512",
+      "type": "image/svg+xml"
+    }
+  ]
+}
