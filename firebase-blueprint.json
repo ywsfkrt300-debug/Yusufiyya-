@@ -1,0 +1,53 @@
+{
+  "entities": {
+    "User": {
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Phone number acts as UID" },
+        "displayName": { "type": "string" },
+        "phoneNumber": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "publicKey": { "type": "string", "description": "RSA Public Key for E2EE" }
+      },
+      "required": ["uid", "displayName", "phoneNumber", "publicKey"]
+    },
+    "Message": {
+      "type": "object",
+      "properties": {
+        "senderId": { "type": "string" },
+        "receiverId": { "type": "string" },
+        "ciphertext": { "type": "string" },
+        "iv": { "type": "string" },
+        "encKeySender": { "type": "string" },
+        "encKeyReceiver": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["senderId", "receiverId", "ciphertext", "iv", "encKeySender", "encKeyReceiver", "timestamp"]
+    },
+    "Status": {
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "type": { "type": "string", "enum": ["text", "image"] },
+        "content": { "type": "string", "description": "Base64 image or text content" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": "number", "description": "Unix timestamp in milliseconds for 24h expiration" }
+      },
+      "required": ["userId", "type", "content", "timestamp", "expiresAt"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "User",
+      "description": "User profiles and their public keys"
+    },
+    "messages/{messageId}": {
+      "schema": "Message",
+      "description": "End-to-End Encrypted messages between users"
+    },
+    "statuses/{statusId}": {
+      "schema": "Status",
+      "description": "24-hour disappearing statuses (images/text)"
+    }
+  }
+}

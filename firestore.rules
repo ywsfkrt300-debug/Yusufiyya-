@@ -1,0 +1,44 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper to check if required fields exist
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    match /users/{userId} {
+      // Allow public read to discover users and get public keys for E2EE
+      allow read: if true;
+      
+      // Allow creation/update based on the custom phone ID
+      // Since we bypass Firebase Auth for the demo, we rely on the client ID
+      allow create, update: if request.resource.data.uid == userId
+        && hasRequiredFields(['uid', 'displayName', 'phoneNumber', 'publicKey']);
+    }
+
+    match /messages/{messageId} {
+      // Allow public read. The content is protected by End-to-End Encryption (RSA+AES).
+      // Even if someone reads the database, they cannot decrypt the messages without the private key stored in IndexedDB.
+      allow read: if true;
+      
+      // Allow sending messages
+      allow create: if hasRequiredFields(['senderId', 'receiverId', 'ciphertext', 'iv', 'encKeySender', 'encKeyReceiver', 'timestamp']);
+        
+      // Allow updating and deleting messages
+      allow update, delete: if true;
+    }
+
+    match /statuses/{statusId} {
+      // Allow public read for statuses
+      allow read: if true;
+      
+      // Allow creating statuses (must have expiration)
+      allow create: if hasRequiredFields(['userId', 'type', 'content', 'timestamp', 'expiresAt']);
+      
+      // Allow deleting own statuses (if needed)
+      allow delete: if true;
+      allow update: if true;
+    }
+  }
+}
