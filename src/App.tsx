@@ -5,7 +5,7 @@ import { generateKeyPair, exportPublicKey, exportPrivateKey, encryptMessage, dec
 import { savePrivateKey, getPrivateKey } from './lib/idb';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import { format } from 'date-fns';
-import { MessageCircle, Send, Smile, Lock, Unlock, Phone, Camera, Settings, CircleDashed, Users, Mic, Square, Trash2, MoreVertical, Play, Pause, Check, CheckCheck, User as UserIcon, Paperclip, File, Image as ImageIcon, Download } from 'lucide-react';
+import { MessageCircle, Send, Smile, Lock, Unlock, Phone, Camera, Settings, CircleDashed, Users, Mic, Square, Trash2, MoreVertical, Play, Pause, Check, CheckCheck, User as UserIcon, Paperclip, File, Image as ImageIcon, Download, X } from 'lucide-react';
 import clsx from 'clsx';
 import AnimatedEmoji from './components/AnimatedEmoji';
 import StatusTab from './components/StatusTab';
@@ -74,6 +74,9 @@ export default function App() {
   const [displayName, setDisplayName] = useState('');
   const [selectedAvatar, setSelectedAvatar] = useState(AVATARS[0]);
   const [isExistingUser, setIsExistingUser] = useState(false);
+  const [password, setPassword] = useState('');
+  const [showPasswordInput, setShowPasswordInput] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   
   // Custom Profile Image State
   const [customImageSrc, setCustomImageSrc] = useState<string | null>(null);
@@ -116,6 +119,8 @@ export default function App() {
   const [quotedMessage, setQuotedMessage] = useState<DecryptedMessage | null>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
+  const [selectedMessageIds, setSelectedMessageIds] = useState<string[]>([]);
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Voice Recording State
@@ -362,6 +367,7 @@ export default function App() {
 
   const handlePhoneSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError(null);
     const normalized = normalizePhone(phoneNumber);
     const fullPhone = `+963${normalized}`;
     
@@ -370,20 +376,38 @@ export default function App() {
     try {
       const userDoc = await getDoc(doc(db, 'users', fullPhone));
       if (userDoc.exists()) {
+        const userData = userDoc.data() as UserProfile;
+        
+        // If user has a password and we haven't shown the input yet
+        if (userData.password && !showPasswordInput) {
+          setShowPasswordInput(true);
+          return;
+        }
+
+        // If password input is shown, verify it
+        if (userData.password && showPasswordInput) {
+          if (userData.password !== password) {
+            setError('كلمة المرور غير صحيحة');
+            return;
+          }
+        }
+
         const privateKey = await getPrivateKey(fullPhone);
         if (privateKey) {
-          const userData = userDoc.data() as UserProfile;
           setLocalUser(userData);
           localStorage.setItem('youssefia_user', JSON.stringify(userData));
           setStep('main');
+          setShowPasswordInput(false);
+          setPassword('');
           return;
         } else {
           // User exists but private key is missing (new device/browser)
           setIsExistingUser(true);
-          const userData = userDoc.data() as UserProfile;
           setDisplayName(userData.displayName);
           setSelectedAvatar(userData.photoURL);
           setStep('profile');
+          setShowPasswordInput(false);
+          setPassword('');
           return;
         }
       }
@@ -391,6 +415,7 @@ export default function App() {
       setStep('profile');
     } catch (error) {
       console.error("Error checking phone:", error);
+      setError('حدث خطأ أثناء التحقق من الرقم');
     }
   };
 
@@ -431,6 +456,7 @@ export default function App() {
         displayName: displayName,
         photoURL: selectedAvatar,
         publicKey: pubKeyPem,
+        password: password || undefined,
         privacy: {
           lastSeen: 'everyone',
           status: 'everyone'
@@ -477,6 +503,21 @@ export default function App() {
     setSelectedUser(null);
     setStep('phone');
     setActiveTab('chats');
+    setShowPasswordInput(false);
+    setPassword('');
+  };
+
+  const handleAccountDelete = async () => {
+    if (!localUser) return;
+    if (!window.confirm('هل أنت متأكد من رغبتك في حذف حسابك؟ سيتم حذف جميع بياناتك نهائياً.')) return;
+
+    try {
+      await deleteDoc(doc(db, 'users', localUser.uid));
+      handleLogout();
+    } catch (error) {
+      console.error('Error deleting account:', error);
+      alert('حدث خطأ أثناء حذف الحساب');
+    }
   };
 
   const handleToggleLockChat = async (targetId: string) => {
@@ -600,19 +641,26 @@ export default function App() {
     }
   };
 
-  const handleDeleteMessage = async (msgId: string, forEveryone: boolean) => {
-    if (!localUser) return;
+  const handleDeleteMessage = async (msgIds: string[], forEveryone: boolean) => {
+    if (!localUser || msgIds.length === 0) return;
     try {
-      if (forEveryone) {
-        await deleteDoc(doc(db, 'messages', msgId));
-      } else {
-        await updateDoc(doc(db, 'messages', msgId), {
-          deletedFor: arrayUnion(localUser.uid)
-        });
+      const batch = writeBatch(db);
+      for (const msgId of msgIds) {
+        const msgRef = doc(db, 'messages', msgId);
+        if (forEveryone) {
+          batch.delete(msgRef);
+        } else {
+          batch.update(msgRef, {
+            deletedFor: arrayUnion(localUser.uid)
+          });
+        }
       }
+      await batch.commit();
       setSelectedMessageId(null);
+      setSelectedMessageIds([]);
+      setIsSelectionMode(false);
     } catch (error) {
-      console.error("Error deleting message:", error);
+      console.error("Error deleting messages:", error);
     }
   };
 
@@ -688,13 +736,48 @@ export default function App() {
                 dir="ltr"
                 placeholder="9xxxxxxxx"
                 required
+                disabled={showPasswordInput}
               />
             </div>
+
+            {showPasswordInput && (
+              <div className="space-y-2 animate-in fade-in slide-in-from-top-2 duration-200">
+                <div className="relative">
+                  <div className="absolute inset-y-0 right-0 flex items-center pr-4 pointer-events-none">
+                    <Lock className="w-5 h-5 text-gray-400" />
+                  </div>
+                  <input 
+                    type="password" 
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full pl-4 pr-12 py-4 border-2 border-gray-200 dark:border-gray-700 rounded-xl focus:ring-4 focus:ring-[#25D366]/20 focus:border-[#25D366] bg-white dark:bg-[#111b21] text-gray-900 dark:text-white text-lg font-medium outline-none transition-all"
+                    placeholder="كلمة المرور"
+                    required
+                    autoFocus
+                  />
+                </div>
+                <button 
+                  type="button" 
+                  onClick={() => {
+                    setShowPasswordInput(false);
+                    setPassword('');
+                  }}
+                  className="text-sm text-[#25D366] font-bold hover:underline"
+                >
+                  تغيير الرقم؟
+                </button>
+              </div>
+            )}
+
+            {error && (
+              <p className="text-red-500 text-sm font-bold">{error}</p>
+            )}
+            
             <button 
-              type="submit"
-              className="w-full bg-[#25D366] hover:bg-[#128C7E] text-white font-bold py-4 px-4 rounded-xl shadow-lg shadow-[#25D366]/30 transition-all transform hover:-translate-y-0.5"
+              type="submit" 
+              className="w-full bg-[#25D366] text-white py-4 rounded-xl font-bold text-lg shadow-lg shadow-[#25D366]/30 hover:bg-[#128C7E] active:scale-95 transition-all"
             >
-              التالي
+              {showPasswordInput ? 'دخول' : 'متابعة'}
             </button>
           </form>
         </div>
@@ -753,6 +836,19 @@ export default function App() {
                 className="w-full pl-4 pr-12 py-4 border-2 border-gray-200 dark:border-gray-700 rounded-xl focus:ring-4 focus:ring-[#25D366]/20 focus:border-[#25D366] bg-white dark:bg-[#111b21] text-gray-900 dark:text-white text-lg font-medium outline-none transition-all placeholder-gray-400 dark:placeholder-gray-600"
                 placeholder="اسمك (مثال: يوسف)"
                 required
+              />
+            </div>
+
+            <div className="relative">
+              <div className="absolute inset-y-0 right-0 flex items-center pr-4 pointer-events-none">
+                <Lock className="w-5 h-5 text-gray-400 dark:text-gray-500" />
+              </div>
+              <input 
+                type="password" 
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full pl-4 pr-12 py-4 border-2 border-gray-200 dark:border-gray-700 rounded-xl focus:ring-4 focus:ring-[#25D366]/20 focus:border-[#25D366] bg-white dark:bg-[#111b21] text-gray-900 dark:text-white text-lg font-medium outline-none transition-all placeholder-gray-400 dark:placeholder-gray-600"
+                placeholder="كلمة المرور (اختياري)"
               />
             </div>
             
@@ -923,7 +1019,14 @@ export default function App() {
       )}
 
       {activeTab === 'settings' && (
-        <SettingsTab localUser={localUser} setLocalUser={setLocalUser} onLogout={handleLogout} theme={theme} setTheme={setTheme} />
+        <SettingsTab 
+          localUser={localUser} 
+          setLocalUser={setLocalUser} 
+          onLogout={handleLogout} 
+          onDeleteAccount={handleAccountDelete}
+          theme={theme} 
+          setTheme={setTheme} 
+        />
       )}
 
         {/* Bottom Navigation Tabs */}
@@ -956,48 +1059,89 @@ export default function App() {
       <div className={clsx("flex-1 flex flex-col bg-[#efeae2] dark:bg-[#0b141a] relative", (!selectedUser && !selectedGroup || activeTab !== 'chats') ? "hidden md:flex" : "flex")}>
         {(selectedUser || selectedGroup) && activeTab === 'chats' ? (
           <>
-            {/* Chat Header */}
-            <div className="bg-[#f0f2f5] dark:bg-[#202c33] p-3 flex items-center gap-4 border-b border-gray-200 dark:border-gray-700 shadow-sm z-10">
-              <button className="md:hidden text-gray-600 dark:text-gray-300 p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full transition" onClick={() => { setSelectedUser(null); setSelectedGroup(null); }}>
-                &rarr;
-              </button>
-              <img src={selectedUser ? selectedUser.photoURL : selectedGroup!.photoURL} alt={selectedUser ? getDisplayName(selectedUser) : selectedGroup!.name} className="w-12 h-12 rounded-full object-cover border border-gray-200 dark:border-gray-600" />
-              <div className="flex-1">
-                {editingContactId === selectedUser.uid ? (
-                  <div className="flex items-center gap-2">
-                    <input 
-                      type="text" 
-                      value={newContactName} 
-                      onChange={(e) => setNewContactName(e.target.value)}
-                      className="text-sm px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-[#111b21] dark:text-white focus:ring-2 focus:ring-[#25D366] outline-none"
-                      autoFocus
-                    />
-                    <button onClick={() => handleSaveContactName(selectedUser.uid)} className="text-[#25D366] font-bold text-sm bg-[#25D366]/10 px-3 py-1.5 rounded-lg hover:bg-[#25D366]/20 transition">حفظ</button>
-                    <button onClick={() => setEditingContactId(null)} className="text-gray-500 text-sm hover:bg-gray-100 dark:hover:bg-gray-800 px-3 py-1.5 rounded-lg transition">إلغاء</button>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2 cursor-pointer group w-max" onClick={() => { setEditingContactId(selectedUser.uid); setNewContactName(getDisplayName(selectedUser)); }}>
-                    <h2 className="font-bold text-gray-900 dark:text-white text-lg">{getDisplayName(selectedUser)}</h2>
+            {/* Chat Header or Selection Toolbar */}
+            {isSelectionMode ? (
+              <div className="bg-[#008069] text-white p-3 flex items-center gap-4 shadow-md z-20 animate-in slide-in-from-top duration-200">
+                <button onClick={() => { setIsSelectionMode(false); setSelectedMessageIds([]); }} className="p-2 hover:bg-white/10 rounded-full transition">
+                  <X className="w-6 h-6" />
+                </button>
+                <span className="flex-1 font-bold text-lg">{selectedMessageIds.length}</span>
+                <div className="flex items-center gap-2">
+                  {selectedMessageIds.length === 1 && (
                     <button 
-                      onClick={(e) => { e.stopPropagation(); handleToggleLockChat(selectedUser.uid); }}
-                      className={clsx(
-                        "p-1.5 rounded-full transition-all",
-                        localUser?.lockedChats?.includes(selectedUser.uid) ? "text-[#25D366] bg-[#25D366]/10" : "text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
-                      )}
-                      title={localUser?.lockedChats?.includes(selectedUser.uid) ? "إلغاء قفل المحادثة" : "قفل المحادثة"}
+                      onClick={() => {
+                        const msg = decryptedMessages.find(m => m.id === selectedMessageIds[0]);
+                        if (msg) setQuotedMessage(msg);
+                        setIsSelectionMode(false);
+                        setSelectedMessageIds([]);
+                      }}
+                      className="p-2 hover:bg-white/10 rounded-full transition"
+                      title="رد"
                     >
-                      {localUser?.lockedChats?.includes(selectedUser.uid) ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
+                      <MessageCircle className="w-6 h-6" />
                     </button>
-                    <span className="text-xs text-gray-400 opacity-0 group-hover:opacity-100 transition bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded-md">تعديل</span>
-                  </div>
-                )}
-                {selectedUser.privacy?.lastSeen !== 'nobody' && selectedUser.lastSeen && (
-                  <p className="text-sm text-gray-500 dark:text-gray-400 font-medium">
-                    آخر ظهور: {format(selectedUser.lastSeen.toDate(), 'HH:mm')}
-                  </p>
-                )}
+                  )}
+                  <button 
+                    onClick={() => handleDeleteMessage(selectedMessageIds, false)}
+                    className="p-2 hover:bg-white/10 rounded-full transition"
+                    title="حذف لدي"
+                  >
+                    <Trash2 className="w-6 h-6" />
+                  </button>
+                  {selectedMessageIds.every(id => decryptedMessages.find(m => m.id === id)?.senderId === localUser?.uid) && (
+                    <button 
+                      onClick={() => handleDeleteMessage(selectedMessageIds, true)}
+                      className="p-2 hover:bg-white/10 rounded-full transition"
+                      title="حذف لدى الجميع"
+                    >
+                      <Trash2 className="w-6 h-6 text-red-200" />
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="bg-[#f0f2f5] dark:bg-[#202c33] p-3 flex items-center gap-4 border-b border-gray-200 dark:border-gray-700 shadow-sm z-10">
+                <button className="md:hidden text-gray-600 dark:text-gray-300 p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full transition" onClick={() => { setSelectedUser(null); setSelectedGroup(null); }}>
+                  &rarr;
+                </button>
+                <img src={selectedUser ? selectedUser.photoURL : selectedGroup!.photoURL} alt={selectedUser ? getDisplayName(selectedUser) : selectedGroup!.name} className="w-12 h-12 rounded-full object-cover border border-gray-200 dark:border-gray-600" />
+                <div className="flex-1">
+                  {editingContactId === selectedUser.uid ? (
+                    <div className="flex items-center gap-2">
+                      <input 
+                        type="text" 
+                        value={newContactName} 
+                        onChange={(e) => setNewContactName(e.target.value)}
+                        className="text-sm px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-[#111b21] dark:text-white focus:ring-2 focus:ring-[#25D366] outline-none"
+                        autoFocus
+                      />
+                      <button onClick={() => handleSaveContactName(selectedUser.uid)} className="text-[#25D366] font-bold text-sm bg-[#25D366]/10 px-3 py-1.5 rounded-lg hover:bg-[#25D366]/20 transition">حفظ</button>
+                      <button onClick={() => setEditingContactId(null)} className="text-gray-500 text-sm hover:bg-gray-100 dark:hover:bg-gray-800 px-3 py-1.5 rounded-lg transition">إلغاء</button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 cursor-pointer group w-max" onClick={() => { setEditingContactId(selectedUser.uid); setNewContactName(getDisplayName(selectedUser)); }}>
+                      <h2 className="font-bold text-gray-900 dark:text-white text-lg">{getDisplayName(selectedUser)}</h2>
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); handleToggleLockChat(selectedUser.uid); }}
+                        className={clsx(
+                          "p-1.5 rounded-full transition-all",
+                          localUser?.lockedChats?.includes(selectedUser.uid) ? "text-[#25D366] bg-[#25D366]/10" : "text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+                        )}
+                        title={localUser?.lockedChats?.includes(selectedUser.uid) ? "إلغاء قفل المحادثة" : "قفل المحادثة"}
+                      >
+                        {localUser?.lockedChats?.includes(selectedUser.uid) ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
+                      </button>
+                      <span className="text-xs text-gray-400 opacity-0 group-hover:opacity-100 transition bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded-md">تعديل</span>
+                    </div>
+                  )}
+                  {selectedUser.privacy?.lastSeen !== 'nobody' && selectedUser.lastSeen && (
+                    <p className="text-sm text-gray-500 dark:text-gray-400 font-medium">
+                      آخر ظهور: {format(selectedUser.lastSeen.toDate(), 'HH:mm')}
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Messages Area */}
             <div className="flex-1 overflow-y-auto p-4 space-y-4 relative" style={{ backgroundImage: theme === 'dark' ? 'none' : 'url("https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png")', backgroundRepeat: 'repeat', opacity: theme === 'dark' ? 1 : 0.9 }}>
@@ -1011,18 +1155,46 @@ export default function App() {
               
               {decryptedMessages.map((msg) => {
                 const isMe = msg.senderId === localUser?.uid;
-                const isSelected = selectedMessageId === msg.id;
+                const isSelected = selectedMessageIds.includes(msg.id);
                 
+                const handleMessageClick = () => {
+                  if (isSelectionMode) {
+                    if (isSelected) {
+                      const newSelected = selectedMessageIds.filter(id => id !== msg.id);
+                      setSelectedMessageIds(newSelected);
+                      if (newSelected.length === 0) setIsSelectionMode(false);
+                    } else {
+                      setSelectedMessageIds([...selectedMessageIds, msg.id]);
+                    }
+                  }
+                };
+
+                const handleLongPress = (e: React.MouseEvent | React.TouchEvent) => {
+                  e.preventDefault();
+                  if (!isSelectionMode) {
+                    setIsSelectionMode(true);
+                    setSelectedMessageIds([msg.id]);
+                  }
+                };
+
                 return (
-                  <div key={msg.id} className={clsx("flex flex-col", isMe ? "items-end" : "items-start")}>
+                  <div 
+                    key={msg.id} 
+                    className={clsx(
+                      "flex flex-col transition-all duration-200", 
+                      isMe ? "items-end" : "items-start",
+                      isSelected && "bg-[#25D366]/10 dark:bg-[#25D366]/5 -mx-4 px-4"
+                    )}
+                    onClick={handleMessageClick}
+                    onContextMenu={handleLongPress}
+                  >
                     <div className={clsx("flex items-center gap-2 max-w-[85%] md:max-w-[75%]", isMe ? "flex-row-reverse" : "flex-row")}>
                       <div 
                         className={clsx(
                           "rounded-2xl px-4 py-2.5 shadow-sm relative cursor-pointer transition-all duration-200",
                           isMe ? "bg-[#dcf8c6] dark:bg-[#005c4b] rounded-tr-none" : "bg-white dark:bg-[#202c33] rounded-tl-none",
-                          isSelected && "ring-2 ring-[#25D366] ring-offset-2 dark:ring-offset-[#0b141a] scale-[1.02]"
+                          isSelected && "ring-2 ring-[#25D366] ring-offset-2 dark:ring-offset-[#0b141a] scale-[1.01]"
                         )}
-                        onClick={() => setSelectedMessageId(isSelected ? null : msg.id)}
                       >
                         {/* Tail for my messages */}
                         {isMe && (
@@ -1082,35 +1254,6 @@ export default function App() {
                         </div>
                       </div>
                     </div>
-                    
-                    {/* Delete Menu */}
-                    {isSelected && (
-                      <div className={clsx("mt-2 flex gap-2 bg-white dark:bg-[#202c33] p-2 rounded-xl shadow-lg z-10 border border-gray-100 dark:border-gray-700/50 animate-in fade-in zoom-in duration-200", isMe ? "mr-2" : "ml-2")}>
-                        <button 
-                          onClick={() => {
-                            setQuotedMessage(msg);
-                            setSelectedMessageId(null);
-                          }}
-                          className="text-sm text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 px-4 py-2 rounded-lg flex items-center gap-2 transition-colors font-medium"
-                        >
-                          <MessageCircle className="w-4 h-4" /> رد
-                        </button>
-                        <button 
-                          onClick={() => handleDeleteMessage(msg.id, false)}
-                          className="text-sm text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 px-4 py-2 rounded-lg flex items-center gap-2 transition-colors font-medium"
-                        >
-                          <Trash2 className="w-4 h-4" /> حذف لدي
-                        </button>
-                        {isMe && (
-                          <button 
-                            onClick={() => handleDeleteMessage(msg.id, true)}
-                            className="text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 px-4 py-2 rounded-lg flex items-center gap-2 font-bold transition-colors"
-                          >
-                            <Trash2 className="w-4 h-4" /> حذف لدى الجميع
-                          </button>
-                        )}
-                      </div>
-                    )}
                   </div>
                 );
               })}
@@ -1148,6 +1291,21 @@ export default function App() {
                 className="p-2.5 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full transition-all"
               >
                 <Smile className="w-6 h-6" />
+              </button>
+
+              <button 
+                type="button"
+                onClick={() => {
+                  const input = document.createElement('input');
+                  input.type = 'file';
+                  input.accept = 'image/*';
+                  input.capture = 'environment';
+                  input.onchange = (e: any) => handleFileSelect(e);
+                  input.click();
+                }}
+                className="p-2.5 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full transition-all"
+              >
+                <Camera className="w-6 h-6" />
               </button>
 
               <button 

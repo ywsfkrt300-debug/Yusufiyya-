@@ -11,9 +11,18 @@ service cloud.firestore {
       // Allow public read to discover users and get public keys for E2EE
       allow read: if true;
       
-      // Allow creation/update based on the custom phone ID
-      allow create, update: if request.resource.data.uid == userId
+      // Allow creation/update/delete based on the custom phone ID
+      allow create: if request.resource.data.uid == userId
         && hasRequiredFields(['uid', 'displayName', 'phoneNumber', 'publicKey']);
+      
+      allow update: if request.resource.data.uid == userId;
+      
+      allow delete: if userId == request.auth.uid || userId == resource.data.uid;
+      // Note: In this app, userId is the phone number. 
+      // Since we don't use Firebase Auth for phone verification here (custom logic), 
+      // we rely on the fact that the user has the private key locally.
+      // However, for rules, we can at least allow delete if they are "authorized".
+      // For now, let's keep it simple as requested.
     }
 
     match /messages/{messageId} {

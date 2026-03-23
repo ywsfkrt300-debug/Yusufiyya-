@@ -1,20 +1,23 @@
 import React, { useState } from 'react';
 import { db } from '../firebase';
 import { doc, updateDoc } from 'firebase/firestore';
-import { Camera, LogOut, User as UserIcon, Check, Edit2, Shield, Moon, Sun, Phone } from 'lucide-react';
+import { Camera, LogOut, User as UserIcon, Check, Edit2, Shield, Moon, Sun, Phone, Key, Trash2 } from 'lucide-react';
 import ImageCropperModal from './ImageCropperModal';
 
 interface Props {
   localUser: any;
   setLocalUser: (user: any) => void;
   onLogout: () => void;
+  onDeleteAccount: () => void;
   theme: 'light' | 'dark';
   setTheme: (theme: 'light' | 'dark') => void;
 }
 
-export default function SettingsTab({ localUser, setLocalUser, onLogout, theme, setTheme }: Props) {
+export default function SettingsTab({ localUser, setLocalUser, onLogout, onDeleteAccount, theme, setTheme }: Props) {
   const [isEditingName, setIsEditingName] = useState(false);
   const [newName, setNewName] = useState(localUser.displayName);
+  const [isEditingPassword, setIsEditingPassword] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
   const [isUpdating, setIsUpdating] = useState(false);
   
   // Image Upload State
@@ -72,6 +75,32 @@ export default function SettingsTab({ localUser, setLocalUser, onLogout, theme, 
     } catch (error) {
       console.error(error);
       alert('حدث خطأ أثناء تحديث الاسم');
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  const handleUpdatePassword = async () => {
+    if (!newPassword.trim()) {
+      setIsEditingPassword(false);
+      return;
+    }
+
+    setIsUpdating(true);
+    try {
+      await updateDoc(doc(db, 'users', localUser.uid), {
+        password: newPassword
+      });
+      
+      const updatedUser = { ...localUser, password: newPassword };
+      setLocalUser(updatedUser);
+      localStorage.setItem('youssefia_user', JSON.stringify(updatedUser));
+      setIsEditingPassword(false);
+      setNewPassword('');
+      alert('تم تحديث كلمة المرور بنجاح');
+    } catch (error) {
+      console.error(error);
+      alert('حدث خطأ أثناء تحديث كلمة المرور');
     } finally {
       setIsUpdating(false);
     }
@@ -285,13 +314,82 @@ export default function SettingsTab({ localUser, setLocalUser, onLogout, theme, 
           </div>
         </div>
 
-        <button 
-          onClick={onLogout}
-          className="w-full bg-white dark:bg-[#202c33] border-2 border-red-100 dark:border-red-900/30 text-red-500 font-bold py-4 px-4 rounded-2xl shadow-sm hover:bg-red-50 dark:hover:bg-red-900/20 hover:border-red-200 dark:hover:border-red-900/50 transition-all transform hover:-translate-y-0.5 flex items-center justify-center gap-3 text-lg"
-        >
-          <LogOut className="w-6 h-6" />
-          تسجيل الخروج
-        </button>
+        <div className="bg-white dark:bg-[#202c33] rounded-3xl shadow-sm p-6 mb-6 border border-gray-100 dark:border-gray-800/50 transition-all hover:shadow-md relative overflow-hidden">
+          <div className="absolute bottom-0 left-0 w-32 h-32 bg-[#128C7E]/5 rounded-full blur-2xl -ml-10 -mb-10"></div>
+          
+          <div className="flex items-center gap-4 mb-6 relative z-10">
+            <div className="bg-gradient-to-br from-[#25D366]/20 to-[#128C7E]/20 p-3 rounded-2xl shadow-inner">
+              <Key className="w-6 h-6 text-[#25D366]" />
+            </div>
+            <h3 className="font-extrabold text-gray-900 dark:text-gray-100 text-xl tracking-tight">الأمان</h3>
+          </div>
+          
+          <div className="space-y-4 relative z-10">
+            <div className="flex flex-col gap-4">
+              <div className="flex justify-between items-center group">
+                <div className="flex-1 pr-4">
+                  <div className="font-bold text-gray-800 dark:text-gray-200 text-lg group-hover:text-[#25D366] transition-colors">كلمة المرور</div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400 mt-1 font-medium">تأمين حسابك بكلمة مرور عند الدخول</div>
+                </div>
+                {!isEditingPassword && (
+                  <button 
+                    onClick={() => setIsEditingPassword(true)}
+                    className="bg-gray-50 dark:bg-[#2a3942] text-[#25D366] font-bold py-2 px-4 rounded-xl hover:bg-[#25D366]/10 transition-all"
+                  >
+                    {localUser.password ? 'تغيير' : 'إضافة'}
+                  </button>
+                )}
+              </div>
+
+              {isEditingPassword && (
+                <div className="flex items-center gap-3 animate-in fade-in slide-in-from-top-2 duration-200">
+                  <input
+                    type="password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="كلمة المرور الجديدة"
+                    className="flex-1 bg-white dark:bg-[#2a3942] dark:text-gray-100 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-[#25D366] focus:border-transparent shadow-sm transition-shadow"
+                    autoFocus
+                  />
+                  <button 
+                    onClick={handleUpdatePassword}
+                    disabled={isUpdating}
+                    className="bg-[#25D366] text-white p-2.5 rounded-xl hover:bg-[#128C7E] disabled:opacity-50 shadow-sm hover:shadow-md transition-all transform hover:scale-105"
+                  >
+                    <Check className="w-5 h-5" />
+                  </button>
+                  <button 
+                    onClick={() => {
+                      setIsEditingPassword(false);
+                      setNewPassword('');
+                    }}
+                    className="bg-gray-100 dark:bg-gray-800 text-gray-500 p-2.5 rounded-xl hover:bg-gray-200 dark:hover:bg-gray-700 transition-all"
+                  >
+                    إلغاء
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          <button 
+            onClick={onLogout}
+            className="w-full bg-white dark:bg-[#202c33] border-2 border-gray-100 dark:border-gray-800/50 text-gray-600 dark:text-gray-300 font-bold py-4 px-4 rounded-2xl shadow-sm hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-all transform hover:-translate-y-0.5 flex items-center justify-center gap-3 text-lg"
+          >
+            <LogOut className="w-6 h-6" />
+            تسجيل الخروج
+          </button>
+
+          <button 
+            onClick={onDeleteAccount}
+            className="w-full bg-white dark:bg-[#202c33] border-2 border-red-100 dark:border-red-900/30 text-red-500 font-bold py-4 px-4 rounded-2xl shadow-sm hover:bg-red-50 dark:hover:bg-red-900/20 hover:border-red-200 dark:hover:border-red-900/50 transition-all transform hover:-translate-y-0.5 flex items-center justify-center gap-3 text-lg"
+          >
+            <Trash2 className="w-6 h-6" />
+            حذف الحساب نهائياً
+          </button>
+        </div>
       </div>
 
       {showCropper && imageSrc && (

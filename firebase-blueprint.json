@@ -8,7 +8,8 @@
         "phoneNumber": { "type": "string" },
         "photoURL": { "type": "string" },
         "publicKey": { "type": "string", "description": "RSA Public Key for E2EE" },
-        "lockedChats": { "type": "array", "items": { "type": "string" }, "description": "Array of user/group IDs that are locked" }
+        "lockedChats": { "type": "array", "items": { "type": "string" }, "description": "Array of user/group IDs that are locked" },
+        "password": { "type": "string", "description": "Optional account password" }
       },
       "required": ["uid", "displayName", "phoneNumber", "publicKey"]
     },

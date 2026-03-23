@@ -12,6 +12,7 @@ export interface UserProfile {
   customNames?: Record<string, string>;
   theme?: 'light' | 'dark';
   lockedChats?: string[]; // Array of user UIDs or group IDs
+  password?: string;
 }
 
 export interface Message {
