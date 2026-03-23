@@ -73,6 +73,7 @@ export default function App() {
   const [phoneNumber, setPhoneNumber] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [selectedAvatar, setSelectedAvatar] = useState(AVATARS[0]);
+  const [isExistingUser, setIsExistingUser] = useState(false);
   
   // Custom Profile Image State
   const [customImageSrc, setCustomImageSrc] = useState<string | null>(null);
@@ -346,23 +347,51 @@ export default function App() {
     decryptAll();
   }, [messages, localUser, step]);
 
+  const normalizePhone = (phone: string) => {
+    let cleaned = phone.replace(/\D/g, '');
+    // Remove country code if entered
+    if (cleaned.startsWith('963')) {
+      cleaned = cleaned.substring(3);
+    }
+    // Remove leading zero
+    if (cleaned.startsWith('0')) {
+      cleaned = cleaned.substring(1);
+    }
+    return cleaned;
+  };
+
   const handlePhoneSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const fullPhone = `+963${phoneNumber}`;
-    if (fullPhone.length < 10) return;
+    const normalized = normalizePhone(phoneNumber);
+    const fullPhone = `+963${normalized}`;
     
-    const userDoc = await getDoc(doc(db, 'users', fullPhone));
-    if (userDoc.exists()) {
-      const privateKey = await getPrivateKey(fullPhone);
-      if (privateKey) {
-        const userData = userDoc.data() as UserProfile;
-        setLocalUser(userData);
-        localStorage.setItem('youssefia_user', JSON.stringify(userData));
-        setStep('main');
-        return;
+    if (normalized.length < 9) return;
+    
+    try {
+      const userDoc = await getDoc(doc(db, 'users', fullPhone));
+      if (userDoc.exists()) {
+        const privateKey = await getPrivateKey(fullPhone);
+        if (privateKey) {
+          const userData = userDoc.data() as UserProfile;
+          setLocalUser(userData);
+          localStorage.setItem('youssefia_user', JSON.stringify(userData));
+          setStep('main');
+          return;
+        } else {
+          // User exists but private key is missing (new device/browser)
+          setIsExistingUser(true);
+          const userData = userDoc.data() as UserProfile;
+          setDisplayName(userData.displayName);
+          setSelectedAvatar(userData.photoURL);
+          setStep('profile');
+          return;
+        }
       }
+      setIsExistingUser(false);
+      setStep('profile');
+    } catch (error) {
+      console.error("Error checking phone:", error);
     }
-    setStep('profile');
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -386,7 +415,8 @@ export default function App() {
   const handleProfileSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!displayName.trim()) return;
-    const fullPhone = `+963${phoneNumber}`;
+    const normalized = normalizePhone(phoneNumber);
+    const fullPhone = `+963${normalized}`;
 
     try {
       const keyPair = await generateKeyPair();
@@ -676,8 +706,14 @@ export default function App() {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-[#ece5dd] to-[#dcf8c6] dark:from-[#111b21] dark:to-[#202c33] p-4 text-center" dir="rtl">
         <div className="bg-white/90 dark:bg-[#202c33]/90 backdrop-blur-md p-8 rounded-3xl shadow-2xl max-w-md w-full border border-white/20 dark:border-gray-700/50">
-          <h2 className="text-3xl font-extrabold text-gray-800 dark:text-white mb-2 tracking-tight">إعداد الملف الشخصي</h2>
-          <p className="text-gray-500 dark:text-gray-400 mb-8 font-medium">الرجاء إدخال اسمك واختيار صورة</p>
+          <h2 className="text-3xl font-extrabold text-gray-800 dark:text-white mb-2 tracking-tight">
+            {isExistingUser ? 'أهلاً بك مجدداً!' : 'إعداد الملف الشخصي'}
+          </h2>
+          <p className="text-gray-500 dark:text-gray-400 mb-8 font-medium">
+            {isExistingUser 
+              ? 'لقد وجدنا حسابك، يرجى تأكيد بياناتك للمتابعة على هذا الجهاز.' 
+              : 'الرجاء إدخال اسمك واختيار صورة'}
+          </p>
           
           <form onSubmit={handleProfileSubmit} className="space-y-8">
             <div className="flex justify-center mb-6">
@@ -724,7 +760,7 @@ export default function App() {
               type="submit"
               className="w-full bg-[#25D366] hover:bg-[#128C7E] text-white font-bold py-4 px-4 rounded-xl shadow-lg shadow-[#25D366]/30 transition-all transform hover:-translate-y-0.5 text-lg"
             >
-              حفظ والبدء
+              {isExistingUser ? 'تأكيد ومتابعة' : 'حفظ والبدء'}
             </button>
           </form>
         </div>
