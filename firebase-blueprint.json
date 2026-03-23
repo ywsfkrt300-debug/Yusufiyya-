@@ -7,7 +7,8 @@
         "displayName": { "type": "string" },
         "phoneNumber": { "type": "string" },
         "photoURL": { "type": "string" },
-        "publicKey": { "type": "string", "description": "RSA Public Key for E2EE" }
+        "publicKey": { "type": "string", "description": "RSA Public Key for E2EE" },
+        "lockedChats": { "type": "array", "items": { "type": "string" }, "description": "Array of user/group IDs that are locked" }
       },
       "required": ["uid", "displayName", "phoneNumber", "publicKey"]
     },
@@ -20,7 +21,10 @@
         "iv": { "type": "string" },
         "encKeySender": { "type": "string" },
         "encKeyReceiver": { "type": "string" },
-        "timestamp": { "type": "string", "format": "date-time" }
+        "timestamp": { "type": "string", "format": "date-time" },
+        "type": { "type": "string", "enum": ["text", "audio", "image", "file"] },
+        "fileName": { "type": "string" },
+        "fileSize": { "type": "number" }
       },
       "required": ["senderId", "receiverId", "ciphertext", "iv", "encKeySender", "encKeyReceiver", "timestamp"]
     },

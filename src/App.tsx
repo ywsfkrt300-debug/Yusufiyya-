@@ -5,7 +5,7 @@ import { generateKeyPair, exportPublicKey, exportPrivateKey, encryptMessage, dec
 import { savePrivateKey, getPrivateKey } from './lib/idb';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import { format } from 'date-fns';
-import { MessageCircle, Send, Smile, Lock, Phone, Camera, Settings, CircleDashed, Users, Mic, Square, Trash2, MoreVertical, Play, Pause, Check, CheckCheck, User as UserIcon } from 'lucide-react';
+import { MessageCircle, Send, Smile, Lock, Unlock, Phone, Camera, Settings, CircleDashed, Users, Mic, Square, Trash2, MoreVertical, Play, Pause, Check, CheckCheck, User as UserIcon, Paperclip, File, Image as ImageIcon, Download } from 'lucide-react';
 import clsx from 'clsx';
 import AnimatedEmoji from './components/AnimatedEmoji';
 import StatusTab from './components/StatusTab';
@@ -105,6 +105,8 @@ export default function App() {
   const [isCreatingGroup, setIsCreatingGroup] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [selectedMembers, setSelectedMembers] = useState<string[]>([]);
+  const [isLockedChatsVisible, setIsLockedChatsVisible] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [decryptedMessages, setDecryptedMessages] = useState<DecryptedMessage[]>([]);
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
@@ -241,14 +243,23 @@ export default function App() {
   useEffect(() => {
     if (step !== 'main' || !localUser || (!selectedUser && !selectedGroup)) return;
 
-    const q = query(
-      collection(db, 'messages'),
-      or(
-        where('senderId', '==', localUser.uid),
-        where('receiverId', '==', localUser.uid)
-      ),
-      orderBy('timestamp', 'asc')
-    );
+    let q;
+    if (selectedGroup) {
+      q = query(
+        collection(db, 'messages'),
+        where('receiverId', '==', selectedGroup.id),
+        orderBy('timestamp', 'asc')
+      );
+    } else {
+      q = query(
+        collection(db, 'messages'),
+        or(
+          where('senderId', '==', localUser.uid),
+          where('receiverId', '==', localUser.uid)
+        ),
+        orderBy('timestamp', 'asc')
+      );
+    }
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const msgs: Message[] = [];
@@ -257,8 +268,9 @@ export default function App() {
       snapshot.docChanges().forEach((change) => {
         if (change.type === 'added') {
           const data = change.doc.data() as Message;
-          // Only notify if it's a new message received (not sent by me) and it's from the selected user
-          if (data.receiverId === localUser.uid && data.senderId === selectedUser.uid) {
+          if (selectedUser && data.receiverId === localUser.uid && data.senderId === selectedUser.uid) {
+             hasNewMessage = true;
+          } else if (selectedGroup && data.receiverId === selectedGroup.id && data.senderId !== localUser.uid) {
              hasNewMessage = true;
           }
         }
@@ -266,14 +278,16 @@ export default function App() {
 
       snapshot.forEach((docSnap) => {
         const data = docSnap.data() as Message;
-        if (
+        const isDirectMatch = selectedUser && (
           (data.senderId === localUser.uid && data.receiverId === selectedUser.uid) ||
           (data.senderId === selectedUser.uid && data.receiverId === localUser.uid)
-        ) {
+        );
+        const isGroupMatch = selectedGroup && data.receiverId === selectedGroup.id;
+
+        if (isDirectMatch || isGroupMatch) {
           if (!data.deletedFor?.includes(localUser.uid)) {
             msgs.push({ ...data, id: docSnap.id });
             
-            // Mark as read if we are receiving it
             if (data.receiverId === localUser.uid && !data.read) {
               updateDoc(doc(db, 'messages', docSnap.id), { read: true });
             }
@@ -286,16 +300,17 @@ export default function App() {
       if (hasNewMessage) {
         notificationSound.current.play().catch(e => console.log('Audio play failed:', e));
         if (document.hidden && Notification.permission === 'granted') {
-           new Notification('رسالة جديدة', {
-             body: `لديك رسالة جديدة من ${selectedUser.displayName}`,
-             icon: selectedUser.photoURL
+           const title = selectedUser ? `رسالة من ${selectedUser.displayName}` : `رسالة في ${selectedGroup?.name}`;
+           new Notification(title, {
+             body: 'لديك رسالة جديدة',
+             icon: selectedUser?.photoURL || selectedGroup?.photoURL
            });
         }
       }
     });
 
     return () => unsubscribe();
-  }, [step, localUser, selectedUser]);
+  }, [step, localUser, selectedUser, selectedGroup]);
 
   // Decrypt Messages
   useEffect(() => {
@@ -303,14 +318,25 @@ export default function App() {
 
     const decryptAll = async () => {
       const privateKeyPem = await getPrivateKey(localUser.uid);
-      if (!privateKeyPem) return;
-
+      
       const decrypted = await Promise.all(messages.map(async (msg) => {
-        const isSender = msg.senderId === localUser.uid;
-        const encKey = isSender ? msg.encKeySender : msg.encKeyReceiver;
-        
-        const text = await decryptMessage(msg.ciphertext, msg.iv, encKey, privateKeyPem);
-        return { ...msg, text };
+        try {
+          // If it's a group message or non-encrypted
+          if (!msg.iv || !msg.ciphertext) {
+            return { ...msg, text: msg.ciphertext || "" };
+          }
+
+          if (!privateKeyPem) return { ...msg, text: "[خطأ في التشفير]" };
+
+          const isSender = msg.senderId === localUser.uid;
+          const encKey = isSender ? msg.encKeySender : msg.encKeyReceiver;
+          
+          const text = await decryptMessage(msg.ciphertext, msg.iv, encKey, privateKeyPem);
+          return { ...msg, text };
+        } catch (e) {
+          console.error("Decryption failed:", e);
+          return { ...msg, text: msg.ciphertext || "[خطأ في التشفير]" };
+        }
       }));
       
       setDecryptedMessages(decrypted);
@@ -423,28 +449,72 @@ export default function App() {
     setActiveTab('chats');
   };
 
-  const sendEncryptedMessage = async (content: string, type: 'text' | 'audio' = 'text', quotedMessageId?: string) => {
-    if (!localUser || !selectedUser) return;
+  const handleToggleLockChat = async (targetId: string) => {
+    if (!localUser) return;
+    const isLocked = localUser.lockedChats?.includes(targetId);
+    const updatedLockedChats = isLocked 
+      ? localUser.lockedChats?.filter(id => id !== targetId)
+      : [...(localUser.lockedChats || []), targetId];
+
     try {
-      const senderPubKey = localUser.publicKey;
-      const receiverPubKey = selectedUser.publicKey;
+      await updateDoc(doc(db, 'users', localUser.uid), {
+        lockedChats: updatedLockedChats
+      });
+      const updatedUser = { ...localUser, lockedChats: updatedLockedChats };
+      setLocalUser(updatedUser);
+      localStorage.setItem('youssefia_user', JSON.stringify(updatedUser));
+    } catch (error) {
+      console.error("Error toggling chat lock:", error);
+    }
+  };
 
-      if (!senderPubKey || !receiverPubKey) throw new Error("Public keys missing");
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !localUser || !selectedUser) return;
 
-      const encryptedData = await encryptMessage(content, senderPubKey, receiverPubKey);
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const base64 = event.target?.result as string;
+      const type = file.type.startsWith('image/') ? 'image' : 'file';
+      await sendEncryptedMessage(base64, type, undefined, file.name, file.size);
+    };
+    reader.readAsDataURL(file);
+    e.target.value = ''; // Reset input
+  };
+
+  const sendEncryptedMessage = async (content: string, type: 'text' | 'audio' | 'image' | 'file' = 'text', quotedMessageId?: string, fileName?: string, fileSize?: number) => {
+    if (!localUser || (!selectedUser && !selectedGroup)) return;
+    try {
+      let ciphertext = content;
+      let iv = "";
+      let encKeySender = "";
+      let encKeyReceiver = "";
+
+      if (selectedUser) {
+        const senderPubKey = localUser.publicKey;
+        const receiverPubKey = selectedUser.publicKey;
+        if (!senderPubKey || !receiverPubKey) throw new Error("Public keys missing");
+        const encryptedData = await encryptMessage(content, senderPubKey, receiverPubKey);
+        ciphertext = encryptedData.ciphertext;
+        iv = encryptedData.iv;
+        encKeySender = encryptedData.encKeySender;
+        encKeyReceiver = encryptedData.encKeyReceiver;
+      }
 
       // Play sent sound immediately
       sentSound.current.play().catch(e => console.log('Audio play failed:', e));
 
       await addDoc(collection(db, 'messages'), {
         senderId: localUser.uid,
-        receiverId: selectedUser.uid,
-        ciphertext: encryptedData.ciphertext,
-        iv: encryptedData.iv,
-        encKeySender: encryptedData.encKeySender,
-        encKeyReceiver: encryptedData.encKeyReceiver,
+        receiverId: selectedUser ? selectedUser.uid : selectedGroup!.id,
+        ciphertext,
+        iv,
+        encKeySender,
+        encKeyReceiver,
         timestamp: serverTimestamp(),
         type,
+        fileName: fileName || null,
+        fileSize: fileSize || null,
         deletedFor: [],
         read: false,
         quotedMessageId: quotedMessageId || null
@@ -682,6 +752,16 @@ export default function App() {
         <div className="bg-[#f0f2f5] dark:bg-[#202c33] p-4 flex justify-between items-center border-b border-gray-200 dark:border-gray-700 shadow-sm z-10">
           <h1 className="font-bold text-2xl text-gray-800 dark:text-white tracking-tight">يوسفيه</h1>
           <div className="flex items-center gap-3">
+            <button 
+              onClick={() => setIsLockedChatsVisible(!isLockedChatsVisible)} 
+              className={clsx(
+                "p-2 rounded-full transition-colors",
+                isLockedChatsVisible ? "bg-[#25D366] text-white" : "text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700"
+              )}
+              title={isLockedChatsVisible ? "إخفاء المحادثات المقفولة" : "إظهار المحادثات المقفولة"}
+            >
+              {isLockedChatsVisible ? <Unlock className="w-6 h-6" /> : <Lock className="w-6 h-6" />}
+            </button>
             <button onClick={() => setIsCreatingGroup(true)} className="p-2 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full">
               <Users className="w-6 h-6" />
             </button>
@@ -738,7 +818,7 @@ export default function App() {
               </div>
             ) : (
               <>
-                {groups.filter(g => g.name.toLowerCase().includes(searchQuery.toLowerCase())).map(g => (
+                {groups.filter(g => g.name.toLowerCase().includes(searchQuery.toLowerCase())).filter(g => isLockedChatsVisible ? localUser?.lockedChats?.includes(g.id) : !localUser?.lockedChats?.includes(g.id)).map(g => (
                   <div 
                     key={g.id} 
                     onClick={() => { setSelectedGroup(g); setSelectedUser(null); }}
@@ -762,7 +842,7 @@ export default function App() {
                     </button>
                   </div>
                 ))}
-                {users.filter(u => getDisplayName(u).toLowerCase().includes(searchQuery.toLowerCase())).map(u => (
+                {users.filter(u => getDisplayName(u).toLowerCase().includes(searchQuery.toLowerCase())).filter(u => isLockedChatsVisible ? localUser?.lockedChats?.includes(u.uid) : !localUser?.lockedChats?.includes(u.uid)).map(u => (
                   <div 
                     key={u.uid} 
                     onClick={() => { setSelectedUser(u); setSelectedGroup(null); }}
@@ -862,6 +942,16 @@ export default function App() {
                 ) : (
                   <div className="flex items-center gap-2 cursor-pointer group w-max" onClick={() => { setEditingContactId(selectedUser.uid); setNewContactName(getDisplayName(selectedUser)); }}>
                     <h2 className="font-bold text-gray-900 dark:text-white text-lg">{getDisplayName(selectedUser)}</h2>
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); handleToggleLockChat(selectedUser.uid); }}
+                      className={clsx(
+                        "p-1.5 rounded-full transition-all",
+                        localUser?.lockedChats?.includes(selectedUser.uid) ? "text-[#25D366] bg-[#25D366]/10" : "text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+                      )}
+                      title={localUser?.lockedChats?.includes(selectedUser.uid) ? "إلغاء قفل المحادثة" : "قفل المحادثة"}
+                    >
+                      {localUser?.lockedChats?.includes(selectedUser.uid) ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
+                    </button>
                     <span className="text-xs text-gray-400 opacity-0 group-hover:opacity-100 transition bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded-md">تعديل</span>
                   </div>
                 )}
@@ -922,6 +1012,23 @@ export default function App() {
                         
                         {msg.type === 'audio' ? (
                           <AudioPlayer src={msg.text} />
+                        ) : msg.type === 'image' ? (
+                          <div className="space-y-2">
+                            <img src={msg.text} alt="Sent image" className="max-w-full rounded-lg shadow-sm cursor-pointer hover:opacity-90 transition" onClick={() => window.open(msg.text)} />
+                          </div>
+                        ) : msg.type === 'file' ? (
+                          <div className="flex items-center gap-3 bg-black/5 dark:bg-black/20 p-3 rounded-xl border border-black/5 dark:border-white/5">
+                            <div className="bg-[#25D366]/20 p-2 rounded-lg">
+                              <File className="w-6 h-6 text-[#25D366]" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-bold truncate text-gray-900 dark:text-gray-100">{msg.fileName || 'ملف'}</p>
+                              <p className="text-[10px] text-gray-500 dark:text-gray-400 uppercase">{msg.fileSize ? (msg.fileSize / 1024).toFixed(1) + ' KB' : 'غير معروف'}</p>
+                            </div>
+                            <a href={msg.text} download={msg.fileName || 'file'} className="p-2 hover:bg-black/5 dark:hover:bg-white/5 rounded-full transition text-[#25D366]">
+                              <Download className="w-5 h-5" />
+                            </a>
+                          </div>
                         ) : isEmojiOnly(msg.text) ? (
                           <div className="flex gap-1">
                             {Array.from(msg.text.trim()).map((char, i) => (
@@ -1006,6 +1113,15 @@ export default function App() {
               >
                 <Smile className="w-6 h-6" />
               </button>
+
+              <button 
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="p-2.5 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full transition-all"
+              >
+                <Paperclip className="w-6 h-6" />
+              </button>
+              <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileSelect} />
               
               {isRecording ? (
                 <div className="flex-1 flex items-center justify-between bg-red-50 dark:bg-red-900/20 rounded-full px-5 py-2.5 border border-red-200 dark:border-red-800/50 shadow-inner">

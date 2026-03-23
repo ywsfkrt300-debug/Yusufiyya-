@@ -11,6 +11,7 @@ export interface UserProfile {
   };
   customNames?: Record<string, string>;
   theme?: 'light' | 'dark';
+  lockedChats?: string[]; // Array of user UIDs or group IDs
 }
 
 export interface Message {
@@ -22,7 +23,9 @@ export interface Message {
   encKeySender: string;
   encKeyReceiver: string;
   timestamp: any;
-  type?: 'text' | 'audio';
+  type?: 'text' | 'audio' | 'image' | 'file';
+  fileName?: string;
+  fileSize?: number;
   deletedFor?: string[];
   read?: boolean;
   quotedMessageId?: string;
