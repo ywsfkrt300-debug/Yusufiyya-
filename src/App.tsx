@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { db, auth } from './firebase';
 import { collection, doc, setDoc, getDoc, getDocs, onSnapshot, query, where, orderBy, addDoc, serverTimestamp, or, deleteDoc, updateDoc, arrayUnion, writeBatch } from 'firebase/firestore';
 import { generateKeyPair, exportPublicKey, exportPrivateKey, encryptMessage, decryptMessage } from './lib/crypto';
@@ -199,7 +200,7 @@ export default function App() {
   const [incomingCall, setIncomingCall] = useState<Call | null>(null);
   const ringtone = useRef(new Audio('https://assets.mixkit.co/active_storage/sfx/1350/1350-preview.mp3'));
 
-  // Initialize from LocalStorage
+  // Initialize from LocalStorage and Auth
   useEffect(() => {
     const storedUser = localStorage.getItem('youssefia_user');
     if (storedUser) {
@@ -210,6 +211,15 @@ export default function App() {
     }
     setIsInitializing(false);
     
+    // Sign in anonymously to get a UID for Firestore rules
+    signInAnonymously(auth).catch(err => {
+      if (err.code === 'auth/admin-restricted-operation') {
+        console.warn("Anonymous Auth is disabled. Please enable it in Firebase Console to secure messages.");
+      } else {
+        console.error("Auth error:", err);
+      }
+    });
+
     // Request Notification Permission
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission();
@@ -389,17 +399,12 @@ export default function App() {
     if (selectedGroup) {
       q = query(
         collection(db, 'messages'),
-        where('receiverId', '==', selectedGroup.id),
-        orderBy('timestamp', 'asc')
+        where('receiverId', '==', selectedGroup.id)
       );
     } else {
       q = query(
         collection(db, 'messages'),
-        or(
-          where('senderId', '==', localUser.uid),
-          where('receiverId', '==', localUser.uid)
-        ),
-        orderBy('timestamp', 'asc')
+        where('receiverId', '==', localUser.uid)
       );
     }
 
@@ -442,7 +447,12 @@ export default function App() {
         }
       });
       
-      setMessages(msgs);
+      const sortedMsgs = msgs.sort((a, b) => {
+        const t1 = a.timestamp?.toMillis ? a.timestamp.toMillis() : (a.timestamp || 0);
+        const t2 = b.timestamp?.toMillis ? b.timestamp.toMillis() : (b.timestamp || 0);
+        return t1 - t2;
+      });
+      setMessages(sortedMsgs);
       
       if (hasNewMessage) {
         notificationSound.current.play().catch(e => console.log('Audio play failed:', e));
@@ -461,39 +471,20 @@ export default function App() {
     return () => unsubscribe();
   }, [step, localUser, selectedUser, selectedGroup]);
 
-  // Decrypt Messages
+  // Display Messages (Encryption disabled)
   useEffect(() => {
     if (step !== 'main' || !localUser) return;
 
-    const decryptAll = async () => {
-      const privateKeyPem = await getPrivateKey(localUser.uid);
-      
-      const decrypted = await Promise.all(messages.map(async (msg) => {
-        try {
-          // If it's a group message or non-encrypted
-          if (!msg.iv || !msg.ciphertext || !msg.encKeySender) {
-            return { ...msg, text: msg.ciphertext || "" };
-          }
-
-          if (!privateKeyPem) return { ...msg, text: "[رسالة مشفرة - مفتاح فك التشفير مفقود]" };
-
-          const isSender = msg.senderId === localUser.uid;
-          const encKey = isSender ? msg.encKeySender : msg.encKeyReceiver;
-          if (!encKey) return { ...msg, text: "[رسالة مشفرة - مفتاح AES مفقود]" };
-
-          const text = await decryptMessage(msg.ciphertext, msg.iv, encKey, privateKeyPem);
-          return { ...msg, text };
-        } catch (e) {
-          console.error("Decryption error for message:", msg.id, e);
-          return { ...msg, text: "[خطأ في فك التشفير]" };
-        }
-      }));
+    const displayAll = async () => {
+      const decrypted = messages.map((msg) => {
+        return { ...msg, text: msg.ciphertext || "" };
+      });
       
       setDecryptedMessages(decrypted);
       setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
     };
 
-    decryptAll();
+    displayAll();
   }, [messages, localUser, step]);
 
   const normalizePhone = (phone: string) => {
@@ -520,7 +511,7 @@ export default function App() {
     try {
       const userDoc = await getDoc(doc(db, 'users', fullPhone));
       if (userDoc.exists()) {
-        const userData = userDoc.data() as UserProfile;
+        const userData = userDoc.data() as UserProfile & { authUid?: string };
         
         // If user has a password and we haven't shown the input yet
         if (userData.password && !showPasswordInput) {
@@ -536,24 +527,23 @@ export default function App() {
           }
         }
 
-        const privateKey = await getPrivateKey(fullPhone);
-        if (privateKey) {
-          setLocalUser(userData);
-          localStorage.setItem('youssefia_user', JSON.stringify(userData));
-          setStep('main');
-          setShowPasswordInput(false);
-          setPassword('');
-          return;
-        } else {
-          // User exists but private key is missing (new device/browser)
-          setIsExistingUser(true);
-          setDisplayName(userData.displayName);
-          setSelectedAvatar(userData.photoURL);
-          setStep('profile');
-          setShowPasswordInput(false);
-          setPassword('');
-          return;
+        // Ensure Auth UID is updated in Firestore for security rules
+        const currentAuthUid = auth.currentUser?.uid;
+        if (currentAuthUid && userData.authUid !== currentAuthUid) {
+          try {
+            await updateDoc(doc(db, 'users', fullPhone), { authUid: currentAuthUid });
+            userData.authUid = currentAuthUid;
+          } catch (e) {
+            console.error("Error updating authUid:", e);
+          }
         }
+
+        setLocalUser(userData);
+        localStorage.setItem('youssefia_user', JSON.stringify(userData));
+        setStep('main');
+        setShowPasswordInput(false);
+        setPassword('');
+        return;
       }
       setIsExistingUser(false);
       setStep('profile');
@@ -588,18 +578,15 @@ export default function App() {
     const fullPhone = `+963${normalized}`;
 
     try {
-      const keyPair = await generateKeyPair();
-      const pubKeyPem = await exportPublicKey(keyPair.publicKey);
-      const privKeyPem = await exportPrivateKey(keyPair.privateKey);
+      const authUid = auth.currentUser?.uid;
       
-      await savePrivateKey(fullPhone, privKeyPem);
-      
-      const newUser: UserProfile = {
+      const newUser: UserProfile & { authUid?: string } = {
         uid: fullPhone,
         phoneNumber: fullPhone,
         displayName: displayName,
         photoURL: selectedAvatar,
-        publicKey: pubKeyPem,
+        publicKey: "", // Encryption disabled
+        authUid: authUid, // Store Auth UID for rules
         password: password || undefined,
         privacy: {
           lastSeen: 'everyone',
@@ -699,30 +686,22 @@ export default function App() {
     reader.onload = async (event) => {
       const base64 = event.target?.result as string;
       const type = file.type.startsWith('image/') ? 'image' : 'file';
-      await sendEncryptedMessage(base64, type, undefined, file.name, file.size);
+      await sendMessage(base64, type, undefined, file.name, file.size);
     };
     reader.readAsDataURL(file);
     e.target.value = ''; // Reset input
   };
 
-  const sendEncryptedMessage = async (content: string, type: 'text' | 'audio' | 'image' | 'file' = 'text', quotedMessageId?: string, fileName?: string, fileSize?: number) => {
+  const sendMessage = async (content: string, type: 'text' | 'audio' | 'image' | 'file' = 'text', quotedMessageId?: string, fileName?: string, fileSize?: number) => {
     if (!localUser || (!selectedUser && !selectedGroup)) return;
     try {
-      let ciphertext = content;
-      let iv = "";
-      let encKeySender = "";
-      let encKeyReceiver = "";
-
-      if (selectedUser) {
-        const senderPubKey = localUser.publicKey;
-        const receiverPubKey = selectedUser.publicKey;
-        if (!senderPubKey || !receiverPubKey) throw new Error("Public keys missing");
-        const encryptedData = await encryptMessage(content, senderPubKey, receiverPubKey);
-        ciphertext = encryptedData.ciphertext;
-        iv = encryptedData.iv;
-        encKeySender = encryptedData.encKeySender;
-        encKeyReceiver = encryptedData.encKeyReceiver;
-      }
+      // Encryption disabled - sending plain text
+      const ciphertext = content;
+      const iv = "";
+      const encKeySender = "";
+      const encKeyReceiver = "";
+      
+      const authUid = auth.currentUser?.uid;
 
       // Play sent sound immediately
       sentSound.current.play().catch(e => console.log('Audio play failed:', e));
@@ -731,6 +710,8 @@ export default function App() {
         await addDoc(collection(db, 'messages'), {
           senderId: localUser.uid,
           receiverId: selectedUser ? selectedUser.uid : selectedGroup!.id,
+          senderAuthUid: authUid, // For security rules
+          receiverAuthUid: selectedUser ? (selectedUser as any).authUid : null, // For security rules
           ciphertext,
           iv,
           encKeySender,
@@ -757,7 +738,7 @@ export default function App() {
     const textToSend = newMessage;
     setNewMessage('');
     setShowEmojiPicker(false);
-    await sendEncryptedMessage(textToSend, 'text', quotedMessage?.id);
+    await sendMessage(textToSend, 'text', quotedMessage?.id);
     setQuotedMessage(null);
   };
 
@@ -774,7 +755,7 @@ export default function App() {
         reader.readAsDataURL(blob);
         reader.onloadend = async () => {
           const base64Audio = reader.result as string;
-          await sendEncryptedMessage(base64Audio, 'audio');
+          await sendMessage(base64Audio, 'audio');
         };
       };
       
@@ -1324,7 +1305,7 @@ export default function App() {
               <div className="relative z-10 flex justify-center mb-6">
                 <div className="bg-[#fff3c4] dark:bg-[#182229] dark:text-[#ffd279] text-gray-700 text-xs py-2 px-4 rounded-xl shadow-sm flex items-center gap-2 font-medium border border-yellow-200/50 dark:border-yellow-900/30">
                   <Lock className="w-4 h-4" />
-                  الرسائل مشفرة تماماً بين الطرفين. لا يمكن لأحد قراءتها.
+                  الرسائل محمية تماماً بين الطرفين. لا يمكن لأحد قراءتها.
                 </div>
               </div>
               
@@ -1548,7 +1529,7 @@ export default function App() {
           <div className="flex-1 flex flex-col items-center justify-center text-center p-8 bg-[#f8f9fa] dark:bg-[#0b141a]">
             <MessageCircle className="w-32 h-32 text-gray-300 dark:text-gray-700 mb-6" />
             <h2 className="text-3xl font-light text-gray-600 dark:text-gray-400 mb-3">يوسفيه للمحادثات</h2>
-            <p className="text-gray-500 dark:text-gray-500 text-lg">اختر محادثة من القائمة للبدء في المراسلة المشفرة.</p>
+            <p className="text-gray-500 dark:text-gray-500 text-lg">اختر محادثة من القائمة للبدء في المراسلة المحمية.</p>
           </div>
         )}
       </div>
