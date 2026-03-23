@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { db } from './firebase';
+import { db, auth } from './firebase';
 import { collection, doc, setDoc, getDoc, getDocs, onSnapshot, query, where, orderBy, addDoc, serverTimestamp, or, deleteDoc, updateDoc, arrayUnion, writeBatch } from 'firebase/firestore';
 import { generateKeyPair, exportPublicKey, exportPrivateKey, encryptMessage, decryptMessage } from './lib/crypto';
 import { savePrivateKey, getPrivateKey } from './lib/idb';
@@ -66,6 +66,57 @@ const AVATARS = [
   "https://api.dicebear.com/7.x/avataaars/svg?seed=Zoe"
 ];
 
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId: string | undefined;
+    email: string | null | undefined;
+    emailVerified: boolean | undefined;
+    isAnonymous: boolean | undefined;
+    tenantId: string | null | undefined;
+    providerInfo: {
+      providerId: string;
+      displayName: string | null;
+      email: string | null;
+      photoUrl: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData.map(provider => ({
+        providerId: provider.providerId,
+        displayName: provider.displayName,
+        email: provider.email,
+        photoUrl: provider.photoURL
+      })) || []
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
 export default function App() {
   const [step, setStep] = useState<'phone' | 'profile' | 'main'>('phone');
   const [activeTab, setActiveTab] = useState<'chats' | 'status' | 'settings'>('chats');
@@ -100,7 +151,7 @@ export default function App() {
       setNewGroupName('');
       setSelectedMembers([]);
     } catch (error) {
-      console.error('Error creating group:', error);
+      handleFirestoreError(error, OperationType.CREATE, 'groups');
     }
   };
 
@@ -182,6 +233,8 @@ export default function App() {
           ringtone.current.play().catch(e => console.log('Ringtone play failed:', e));
         }
       });
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'calls');
     });
     return () => unsubscribe();
   }, [localUser]);
@@ -195,8 +248,12 @@ export default function App() {
       status: 'ringing',
       timestamp: serverTimestamp(),
     };
-    const docRef = await addDoc(collection(db, 'calls'), callData);
-    setActiveCall({ id: docRef.id, ...callData } as Call);
+    try {
+      const docRef = await addDoc(collection(db, 'calls'), callData);
+      setActiveCall({ id: docRef.id, ...callData } as Call);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'calls');
+    }
   };
 
   const handleAcceptCall = async () => {
@@ -211,8 +268,12 @@ export default function App() {
     if (!incomingCall) return;
     ringtone.current.pause();
     ringtone.current.currentTime = 0;
-    await updateDoc(doc(db, 'calls', incomingCall.id), { status: 'rejected' });
-    setIncomingCall(null);
+    try {
+      await updateDoc(doc(db, 'calls', incomingCall.id), { status: 'rejected' });
+      setIncomingCall(null);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `calls/${incomingCall.id}`);
+    }
   };
 
   const handleEndCall = () => {
@@ -244,9 +305,13 @@ export default function App() {
     
     // Update last seen
     const updateLastSeen = async () => {
-      await updateDoc(doc(db, 'users', localUser.uid), {
-        lastSeen: serverTimestamp()
-      });
+      try {
+        await updateDoc(doc(db, 'users', localUser.uid), {
+          lastSeen: serverTimestamp()
+        });
+      } catch (error) {
+        handleFirestoreError(error, OperationType.UPDATE, `users/${localUser.uid}`);
+      }
     };
     updateLastSeen();
     const interval = setInterval(updateLastSeen, 60000); // Update every minute
@@ -260,6 +325,8 @@ export default function App() {
         }
       });
       setUsers(usersList);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'users');
     });
     return () => {
       unsubscribe();
@@ -285,6 +352,8 @@ export default function App() {
         }
       });
       setUnreadCounts(counts);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'messages');
     });
 
     return () => unsubscribe();
@@ -305,6 +374,8 @@ export default function App() {
         groupsList.push({ id: doc.id, ...doc.data() } as Group);
       });
       setGroups(groupsList);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'groups');
     });
 
     return () => unsubscribe();
@@ -359,9 +430,14 @@ export default function App() {
           if (!data.deletedFor?.includes(localUser.uid)) {
             msgs.push({ ...data, id: docSnap.id });
             
-            if (data.receiverId === localUser.uid && !data.read) {
-              updateDoc(doc(db, 'messages', docSnap.id), { read: true });
-            }
+    try {
+      const updateReadStatus = async () => {
+        await updateDoc(doc(db, 'messages', docSnap.id), { read: true });
+      };
+      updateReadStatus();
+    } catch (error) {
+      console.error("Error updating read status:", error);
+    }
           }
         }
       });
@@ -378,6 +454,8 @@ export default function App() {
            });
         }
       }
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'messages');
     });
 
     return () => unsubscribe();
@@ -393,20 +471,21 @@ export default function App() {
       const decrypted = await Promise.all(messages.map(async (msg) => {
         try {
           // If it's a group message or non-encrypted
-          if (!msg.iv || !msg.ciphertext) {
+          if (!msg.iv || !msg.ciphertext || !msg.encKeySender) {
             return { ...msg, text: msg.ciphertext || "" };
           }
 
-          if (!privateKeyPem) return { ...msg, text: "[خطأ في التشفير]" };
+          if (!privateKeyPem) return { ...msg, text: "[رسالة مشفرة - مفتاح فك التشفير مفقود]" };
 
           const isSender = msg.senderId === localUser.uid;
           const encKey = isSender ? msg.encKeySender : msg.encKeyReceiver;
-          
+          if (!encKey) return { ...msg, text: "[رسالة مشفرة - مفتاح AES مفقود]" };
+
           const text = await decryptMessage(msg.ciphertext, msg.iv, encKey, privateKeyPem);
           return { ...msg, text };
         } catch (e) {
-          console.error("Decryption failed:", e);
-          return { ...msg, text: msg.ciphertext || "[خطأ في التشفير]" };
+          console.error("Decryption error for message:", msg.id, e);
+          return { ...msg, text: "[خطأ في فك التشفير]" };
         }
       }));
       
@@ -530,11 +609,15 @@ export default function App() {
         theme: 'light'
       };
 
-      await setDoc(doc(db, 'users', fullPhone), newUser);
-      
-      setLocalUser(newUser);
-      localStorage.setItem('youssefia_user', JSON.stringify(newUser));
-      setStep('main');
+      try {
+        await setDoc(doc(db, 'users', fullPhone), newUser);
+        
+        setLocalUser(newUser);
+        localStorage.setItem('youssefia_user', JSON.stringify(newUser));
+        setStep('main');
+      } catch (error) {
+        handleFirestoreError(error, OperationType.WRITE, `users/${fullPhone}`);
+      }
     } catch (error) {
       console.error("Error creating profile:", error);
     }
@@ -549,14 +632,18 @@ export default function App() {
         [contactId]: newContactName.trim()
       };
       
-      await updateDoc(doc(db, 'users', localUser.uid), {
-        customNames: updatedCustomNames
-      });
-      
-      const updatedUser = { ...localUser, customNames: updatedCustomNames };
-      setLocalUser(updatedUser);
-      localStorage.setItem('youssefia_user', JSON.stringify(updatedUser));
-      setEditingContactId(null);
+      try {
+        await updateDoc(doc(db, 'users', localUser.uid), {
+          customNames: updatedCustomNames
+        });
+        
+        const updatedUser = { ...localUser, customNames: updatedCustomNames };
+        setLocalUser(updatedUser);
+        localStorage.setItem('youssefia_user', JSON.stringify(updatedUser));
+        setEditingContactId(null);
+      } catch (error) {
+        handleFirestoreError(error, OperationType.UPDATE, `users/${localUser.uid}`);
+      }
     } catch (error) {
       console.error("Error updating contact name:", error);
     }
@@ -640,21 +727,25 @@ export default function App() {
       // Play sent sound immediately
       sentSound.current.play().catch(e => console.log('Audio play failed:', e));
 
-      await addDoc(collection(db, 'messages'), {
-        senderId: localUser.uid,
-        receiverId: selectedUser ? selectedUser.uid : selectedGroup!.id,
-        ciphertext,
-        iv,
-        encKeySender,
-        encKeyReceiver,
-        timestamp: serverTimestamp(),
-        type,
-        fileName: fileName || null,
-        fileSize: fileSize || null,
-        deletedFor: [],
-        read: false,
-        quotedMessageId: quotedMessageId || null
-      });
+      try {
+        await addDoc(collection(db, 'messages'), {
+          senderId: localUser.uid,
+          receiverId: selectedUser ? selectedUser.uid : selectedGroup!.id,
+          ciphertext,
+          iv,
+          encKeySender,
+          encKeyReceiver,
+          timestamp: serverTimestamp(),
+          type,
+          fileName: fileName || null,
+          fileSize: fileSize || null,
+          deletedFor: [],
+          read: false,
+          quotedMessageId: quotedMessageId || null
+        });
+      } catch (error) {
+        handleFirestoreError(error, OperationType.CREATE, 'messages');
+      }
     } catch (error) {
       console.error("Error sending message:", error);
     }
