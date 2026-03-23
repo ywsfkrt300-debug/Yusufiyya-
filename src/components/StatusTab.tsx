@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../firebase';
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp, orderBy, updateDoc, doc, arrayUnion, deleteDoc } from 'firebase/firestore';
-import { Camera, Plus, X, Image as ImageIcon, Type, Trash2 } from 'lucide-react';
+import { collection, query, where, onSnapshot, addDoc, serverTimestamp, orderBy, updateDoc, doc, arrayUnion, arrayRemove, deleteDoc } from 'firebase/firestore';
+import { Camera, Plus, X, Image as ImageIcon, Type, Trash2, Heart } from 'lucide-react';
 import { format } from 'date-fns';
 import clsx from 'clsx';
 import ImageCropperModal from './ImageCropperModal';
@@ -21,6 +21,7 @@ interface Status {
   timestamp: any;
   expiresAt: number;
   viewedBy?: string[];
+  likes?: string[];
 }
 
 export default function StatusTab({ localUser, users, getDisplayName }: Props) {
@@ -75,7 +76,8 @@ export default function StatusTab({ localUser, users, getDisplayName }: Props) {
         content: croppedBase64,
         timestamp: serverTimestamp(),
         expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
-        viewedBy: []
+        viewedBy: [],
+        likes: []
       });
       setIsAddingStatus(false);
       setStatusImageSrc(null);
@@ -94,7 +96,8 @@ export default function StatusTab({ localUser, users, getDisplayName }: Props) {
         textColor: statusTextColor,
         timestamp: serverTimestamp(),
         expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
-        viewedBy: []
+        viewedBy: [],
+        likes: []
       });
       setIsAddingStatus(false);
       setStatusText('');
@@ -152,6 +155,20 @@ export default function StatusTab({ localUser, users, getDisplayName }: Props) {
       setViewingUserStatuses(null);
     }
   };
+
+  const handleLikeStatus = async (e: React.MouseEvent, statusId: string, isLiked: boolean) => {
+    e.stopPropagation();
+    try {
+      await updateDoc(doc(db, 'statuses', statusId), {
+        likes: isLiked ? arrayRemove(localUser.uid) : arrayUnion(localUser.uid)
+      });
+    } catch (error) {
+      console.error('Error liking status:', error);
+    }
+  };
+
+  const currentStatus = viewingUserStatuses?.[currentStatusIndex];
+  const isLiked = currentStatus?.likes?.includes(localUser.uid) || false;
 
   return (
     <div className="flex-1 overflow-y-auto bg-[#f0f2f5] dark:bg-[#111b21] p-4" dir="rtl">
@@ -307,27 +324,27 @@ export default function StatusTab({ localUser, users, getDisplayName }: Props) {
           <div className="absolute top-6 left-0 right-0 p-4 flex justify-between items-center z-20">
             <div className="flex items-center gap-3">
               <img 
-                src={viewingUserStatuses[currentStatusIndex].userId === localUser.uid ? localUser.photoURL : users.find(u => u.uid === viewingUserStatuses[currentStatusIndex].userId)?.photoURL} 
+                src={currentStatus.userId === localUser.uid ? localUser.photoURL : users.find(u => u.uid === currentStatus.userId)?.photoURL} 
                 className="w-10 h-10 rounded-full border-2 border-white/20 shadow-sm" 
                 alt="User"
               />
               <div className="flex flex-col">
                 <span className="text-white font-bold drop-shadow-md text-lg">
-                  {viewingUserStatuses[currentStatusIndex].userId === localUser.uid ? 'أنت' : users.find(u => u.uid === viewingUserStatuses[currentStatusIndex].userId)?.displayName}
+                  {currentStatus.userId === localUser.uid ? 'أنت' : users.find(u => u.uid === currentStatus.userId)?.displayName}
                 </span>
                 <span className="text-white/80 text-xs drop-shadow-md">
-                  {viewingUserStatuses[currentStatusIndex].timestamp ? format(viewingUserStatuses[currentStatusIndex].timestamp.toDate(), 'HH:mm') : 'الآن'}
+                  {currentStatus.timestamp ? format(currentStatus.timestamp.toDate(), 'HH:mm') : 'الآن'}
                 </span>
               </div>
             </div>
             <button onClick={(e) => { e.stopPropagation(); setViewingUserStatuses(null); }} className="p-2 text-white hover:bg-white/20 rounded-full transition-colors backdrop-blur-sm">
               <X className="w-6 h-6" />
             </button>
-            {viewingUserStatuses[currentStatusIndex].userId === localUser.uid && (
+            {currentStatus.userId === localUser.uid && (
               <button 
                 onClick={async (e) => {
                   e.stopPropagation();
-                  await deleteDoc(doc(db, 'statuses', viewingUserStatuses[currentStatusIndex].id));
+                  await deleteDoc(doc(db, 'statuses', currentStatus.id));
                   setViewingUserStatuses(null);
                 }}
                 className="p-2 text-red-500 hover:bg-red-500/20 rounded-full transition-colors backdrop-blur-sm"
@@ -338,18 +355,36 @@ export default function StatusTab({ localUser, users, getDisplayName }: Props) {
           </div>
 
           <div className="flex-1 flex items-center justify-center relative bg-black">
-            {viewingUserStatuses[currentStatusIndex].type === 'image' ? (
-              <img src={viewingUserStatuses[currentStatusIndex].content} alt="Status" className="w-full h-full object-contain animate-in zoom-in-95 duration-300" />
+            {currentStatus.type === 'image' ? (
+              <img src={currentStatus.content} alt="Status" className="w-full h-full object-contain animate-in zoom-in-95 duration-300" />
             ) : (
               <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 p-8 animate-in zoom-in-95 duration-300">
                 <p 
                   className="text-4xl md:text-5xl text-center font-bold drop-shadow-2xl leading-relaxed whitespace-pre-wrap max-w-3xl"
-                  style={{ color: viewingUserStatuses[currentStatusIndex].textColor || '#ffffff' }}
+                  style={{ color: currentStatus.textColor || '#ffffff' }}
                 >
-                  {viewingUserStatuses[currentStatusIndex].content}
+                  {currentStatus.content}
                 </p>
               </div>
             )}
+
+            {/* Like Button Overlay */}
+            <div className="absolute bottom-10 left-0 right-0 flex flex-col items-center gap-2 z-30">
+              <button 
+                onClick={(e) => handleLikeStatus(e, currentStatus.id, isLiked)}
+                className={clsx(
+                  "p-4 rounded-full transition-all transform hover:scale-125 active:scale-95 shadow-2xl backdrop-blur-md",
+                  isLiked ? "bg-red-500 text-white" : "bg-white/20 text-white hover:bg-white/40"
+                )}
+              >
+                <Heart className={clsx("w-8 h-8", isLiked && "fill-current")} />
+              </button>
+              {currentStatus.likes && currentStatus.likes.length > 0 && (
+                <span className="text-white font-bold text-sm drop-shadow-md bg-black/20 px-3 py-1 rounded-full backdrop-blur-sm">
+                  {currentStatus.likes.length} إعجاب
+                </span>
+              )}
+            </div>
           </div>
         </div>
       )}

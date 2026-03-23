@@ -31,7 +31,8 @@
         "type": { "type": "string", "enum": ["text", "image"] },
         "content": { "type": "string", "description": "Base64 image or text content" },
         "timestamp": { "type": "string", "format": "date-time" },
-        "expiresAt": { "type": "number", "description": "Unix timestamp in milliseconds for 24h expiration" }
+        "expiresAt": { "type": "number", "description": "Unix timestamp in milliseconds for 24h expiration" },
+        "likes": { "type": "array", "items": { "type": "string" }, "description": "List of user UIDs who liked the status" }
       },
       "required": ["userId", "type", "content", "timestamp", "expiresAt"]
     },

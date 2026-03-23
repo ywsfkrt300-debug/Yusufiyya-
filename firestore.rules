@@ -45,7 +45,7 @@ service cloud.firestore {
       // Allow creating statuses
       allow create: if hasRequiredFields(['userId', 'type', 'content', 'timestamp', 'expiresAt']);
       
-      // Allow deleting and updating statuses
+      // Allow deleting and updating statuses (including likes)
       allow delete, update: if true;
     }
   }

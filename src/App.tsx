@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db } from './firebase';
-import { collection, doc, setDoc, getDoc, onSnapshot, query, where, orderBy, addDoc, serverTimestamp, or, deleteDoc, updateDoc, arrayUnion } from 'firebase/firestore';
+import { collection, doc, setDoc, getDoc, getDocs, onSnapshot, query, where, orderBy, addDoc, serverTimestamp, or, deleteDoc, updateDoc, arrayUnion, writeBatch } from 'firebase/firestore';
 import { generateKeyPair, exportPublicKey, exportPrivateKey, encryptMessage, decryptMessage } from './lib/crypto';
 import { savePrivateKey, getPrivateKey } from './lib/idb';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
@@ -516,6 +516,43 @@ export default function App() {
     }
   };
 
+  const handleDeleteChat = async (e: React.MouseEvent, targetId: string, isGroup: boolean) => {
+    e.stopPropagation();
+    if (!localUser) return;
+    
+    try {
+      const q = isGroup 
+        ? query(collection(db, 'messages'), where('receiverId', '==', targetId))
+        : query(
+            collection(db, 'messages'),
+            or(
+              where('senderId', '==', localUser.uid),
+              where('receiverId', '==', localUser.uid)
+            )
+          );
+
+      const snapshot = await getDocs(q);
+      const batch = writeBatch(db);
+      
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data() as Message;
+        if (isGroup || (data.senderId === targetId || data.receiverId === targetId)) {
+          batch.update(doc(db, 'messages', docSnap.id), {
+            deletedFor: arrayUnion(localUser.uid)
+          });
+        }
+      });
+
+      await batch.commit();
+      if (selectedUser?.uid === targetId || selectedGroup?.id === targetId) {
+        setSelectedUser(null);
+        setSelectedGroup(null);
+      }
+    } catch (error) {
+      console.error("Error deleting chat:", error);
+    }
+  };
+
   if (isInitializing) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-[#ece5dd] to-[#dcf8c6] dark:from-[#111b21] dark:to-[#202c33]">
@@ -706,7 +743,7 @@ export default function App() {
                     key={g.id} 
                     onClick={() => { setSelectedGroup(g); setSelectedUser(null); }}
                     className={clsx(
-                      "flex items-center gap-4 p-4 cursor-pointer border-b border-gray-100 dark:border-gray-800/50 hover:bg-gray-50 dark:hover:bg-[#202c33] transition-all duration-200",
+                      "flex items-center gap-4 p-4 cursor-pointer border-b border-gray-100 dark:border-gray-800/50 hover:bg-gray-50 dark:hover:bg-[#202c33] transition-all duration-200 group",
                       selectedGroup?.id === g.id && "bg-gray-100 dark:bg-[#2a3942]"
                     )}
                   >
@@ -717,6 +754,12 @@ export default function App() {
                       <h3 className="font-bold text-gray-900 dark:text-gray-100 text-lg truncate">{g.name}</h3>
                       <p className="text-sm text-gray-500 dark:text-gray-400 truncate font-medium">مجموعة</p>
                     </div>
+                    <button 
+                      onClick={(e) => handleDeleteChat(e, g.id, true)}
+                      className="p-2 text-gray-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+                    >
+                      <Trash2 className="w-5 h-5" />
+                    </button>
                   </div>
                 ))}
                 {users.filter(u => getDisplayName(u).toLowerCase().includes(searchQuery.toLowerCase())).map(u => (
@@ -724,7 +767,7 @@ export default function App() {
                     key={u.uid} 
                     onClick={() => { setSelectedUser(u); setSelectedGroup(null); }}
                     className={clsx(
-                      "flex items-center gap-4 p-4 cursor-pointer border-b border-gray-100 dark:border-gray-800/50 hover:bg-gray-50 dark:hover:bg-[#202c33] transition-all duration-200",
+                      "flex items-center gap-4 p-4 cursor-pointer border-b border-gray-100 dark:border-gray-800/50 hover:bg-gray-50 dark:hover:bg-[#202c33] transition-all duration-200 group",
                       selectedUser?.uid === u.uid && "bg-gray-100 dark:bg-[#2a3942]"
                     )}
                   >
@@ -745,6 +788,12 @@ export default function App() {
                       </div>
                       <p className="text-sm text-gray-500 dark:text-gray-400 truncate font-medium" dir="ltr">{u.phoneNumber}</p>
                     </div>
+                    <button 
+                      onClick={(e) => handleDeleteChat(e, u.uid, false)}
+                      className="p-2 text-gray-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+                    >
+                      <Trash2 className="w-5 h-5" />
+                    </button>
                   </div>
                 ))}
               </>
