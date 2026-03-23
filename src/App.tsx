@@ -752,17 +752,18 @@ export default function App() {
                   </div>
                 ))}
               </>
-            ))}
+            )}
           </div>
-        ))}
+        )
+      )}
 
-        {activeTab === 'status' && (
-          <StatusTab localUser={localUser} users={users} getDisplayName={getDisplayName} />
-        ))}
+      {activeTab === 'status' && (
+        <StatusTab localUser={localUser} users={users} getDisplayName={getDisplayName} />
+      )}
 
-        {activeTab === 'settings' && (
-          <SettingsTab localUser={localUser} setLocalUser={setLocalUser} onLogout={handleLogout} theme={theme} setTheme={setTheme} />
-        ))}
+      {activeTab === 'settings' && (
+        <SettingsTab localUser={localUser} setLocalUser={setLocalUser} onLogout={handleLogout} theme={theme} setTheme={setTheme} />
+      )}
 
         {/* Bottom Navigation Tabs */}
         <div className="bg-[#f0f2f5] dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 flex justify-around p-2">
@@ -1019,7 +1020,7 @@ export default function App() {
             <h2 className="text-3xl font-light text-gray-600 dark:text-gray-400 mb-3">يوسفيه للمحادثات</h2>
             <p className="text-gray-500 dark:text-gray-500 text-lg">اختر محادثة من القائمة للبدء في المراسلة المشفرة.</p>
           </div>
-        )))}
+        )}
       </div>
     </div>
   );
