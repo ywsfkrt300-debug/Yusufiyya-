@@ -5,13 +5,16 @@ import { generateKeyPair, exportPublicKey, exportPrivateKey, encryptMessage, dec
 import { savePrivateKey, getPrivateKey } from './lib/idb';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import { format } from 'date-fns';
-import { MessageCircle, Send, Smile, Lock, Unlock, Phone, Camera, Settings, CircleDashed, Users, Mic, Square, Trash2, MoreVertical, Play, Pause, Check, CheckCheck, User as UserIcon, Paperclip, File, Image as ImageIcon, Download, X } from 'lucide-react';
+import { MessageCircle, Send, Smile, Lock, Unlock, Phone, Video, Camera, Settings, CircleDashed, Users, Mic, Square, Trash2, MoreVertical, Play, Pause, Check, CheckCheck, User as UserIcon, Paperclip, File, Image as ImageIcon, Download, X } from 'lucide-react';
 import clsx from 'clsx';
+import { AnimatePresence } from 'motion/react';
 import AnimatedEmoji from './components/AnimatedEmoji';
 import StatusTab from './components/StatusTab';
 import SettingsTab from './components/SettingsTab';
 import ImageCropperModal from './components/ImageCropperModal';
-import { UserProfile, Message, DecryptedMessage, Group } from './types';
+import CallScreen from './components/CallScreen';
+import IncomingCall from './components/IncomingCall';
+import { UserProfile, Message, DecryptedMessage, Group, Call } from './types';
 
 const isEmojiOnly = (text: string) => {
   const emojiRegex = /^[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F900}-\u{1F9FF}\u{1F1E0}-\u{1F1FF}]+$/u;
@@ -140,6 +143,11 @@ export default function App() {
   const [editingContactId, setEditingContactId] = useState<string | null>(null);
   const [newContactName, setNewContactName] = useState('');
 
+  // Call State
+  const [activeCall, setActiveCall] = useState<Call | null>(null);
+  const [incomingCall, setIncomingCall] = useState<Call | null>(null);
+  const ringtone = useRef(new Audio('https://assets.mixkit.co/active_storage/sfx/1350/1350-preview.mp3'));
+
   // Initialize from LocalStorage
   useEffect(() => {
     const storedUser = localStorage.getItem('youssefia_user');
@@ -156,6 +164,63 @@ export default function App() {
       Notification.requestPermission();
     }
   }, []);
+
+  // Listen for incoming calls
+  useEffect(() => {
+    if (!localUser) return;
+    const q = query(
+      collection(db, 'calls'),
+      where('receiverId', '==', localUser.uid),
+      where('status', '==', 'ringing')
+    );
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === 'added') {
+          const callData = { id: change.doc.id, ...change.doc.data() } as Call;
+          setIncomingCall(callData);
+          ringtone.current.loop = true;
+          ringtone.current.play().catch(e => console.log('Ringtone play failed:', e));
+        }
+      });
+    });
+    return () => unsubscribe();
+  }, [localUser]);
+
+  const handleStartCall = async (type: 'audio' | 'video') => {
+    if (!localUser || !selectedUser) return;
+    const callData = {
+      callerId: localUser.uid,
+      receiverId: selectedUser.uid,
+      type,
+      status: 'ringing',
+      timestamp: serverTimestamp(),
+    };
+    const docRef = await addDoc(collection(db, 'calls'), callData);
+    setActiveCall({ id: docRef.id, ...callData } as Call);
+  };
+
+  const handleAcceptCall = async () => {
+    if (!incomingCall) return;
+    ringtone.current.pause();
+    ringtone.current.currentTime = 0;
+    setActiveCall(incomingCall);
+    setIncomingCall(null);
+  };
+
+  const handleRejectCall = async () => {
+    if (!incomingCall) return;
+    ringtone.current.pause();
+    ringtone.current.currentTime = 0;
+    await updateDoc(doc(db, 'calls', incomingCall.id), { status: 'rejected' });
+    setIncomingCall(null);
+  };
+
+  const handleEndCall = () => {
+    setActiveCall(null);
+    setIncomingCall(null);
+    ringtone.current.pause();
+    ringtone.current.currentTime = 0;
+  };
 
   // Apply Theme
   useEffect(() => {
@@ -1140,6 +1205,25 @@ export default function App() {
                     </p>
                   )}
                 </div>
+
+                {selectedUser && (
+                  <div className="flex items-center gap-1">
+                    <button 
+                      onClick={() => handleStartCall('audio')}
+                      className="p-2.5 text-gray-500 dark:text-gray-400 hover:text-[#25D366] hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full transition"
+                      title="مكالمة صوتية"
+                    >
+                      <Phone className="w-5 h-5" />
+                    </button>
+                    <button 
+                      onClick={() => handleStartCall('video')}
+                      className="p-2.5 text-gray-500 dark:text-gray-400 hover:text-[#25D366] hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full transition"
+                      title="مكالمة فيديو"
+                    >
+                      <Video className="w-5 h-5" />
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1377,6 +1461,25 @@ export default function App() {
           </div>
         )}
       </div>
+
+      <AnimatePresence>
+        {incomingCall && (
+          <IncomingCall 
+            caller={users.find(u => u.uid === incomingCall.callerId)!} 
+            call={incomingCall} 
+            onAccept={handleAcceptCall} 
+            onReject={handleRejectCall} 
+          />
+        )}
+        {activeCall && (
+          <CallScreen 
+            localUser={localUser!} 
+            remoteUser={users.find(u => u.uid === (activeCall.callerId === localUser?.uid ? activeCall.receiverId : activeCall.callerId))!} 
+            call={activeCall} 
+            onEnd={handleEndCall} 
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

@@ -2,6 +2,7 @@
   "name": "يوسفيه للمحادثات",
   "description": "تطبيق محادثات يشبه واتساب مع تشفير من طرف إلى طرف ودعم للرموز التعبيرية.",
   "requestFramePermissions": [
-    "microphone"
+    "microphone",
+    "camera"
   ]
 }

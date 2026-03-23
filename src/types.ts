@@ -44,3 +44,14 @@ export interface Group {
   createdAt: any;
   photoURL: string;
 }
+
+export interface Call {
+  id: string;
+  callerId: string;
+  receiverId: string;
+  type: 'audio' | 'video';
+  status: 'ringing' | 'accepted' | 'rejected' | 'ended';
+  offer?: any;
+  answer?: any;
+  timestamp: any;
+}

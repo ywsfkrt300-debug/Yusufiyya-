@@ -57,5 +57,17 @@ service cloud.firestore {
       // Allow deleting and updating statuses (including likes)
       allow delete, update: if true;
     }
+
+    match /calls/{callId} {
+      // Allow read and write for signaling. In production, check callerId/receiverId.
+      allow read, write: if true;
+      
+      match /callerCandidates/{candidateId} {
+        allow read, write: if true;
+      }
+      match /receiverCandidates/{candidateId} {
+        allow read, write: if true;
+      }
+    }
   }
 }
