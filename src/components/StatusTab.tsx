@@ -179,7 +179,7 @@ export default function StatusTab({ localUser, users, getDisplayName }: Props) {
           onClick={() => myStatuses.length > 0 ? handleViewStatus(myStatuses) : setIsAddingStatus(true)}
         >
           <div className="relative">
-            <img src={localUser.photoURL} alt="My Status" className={clsx("w-14 h-14 rounded-full object-cover", myStatuses.length > 0 && "ring-2 ring-gray-300 dark:ring-gray-600 p-0.5")} />
+            <img src={localUser?.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(localUser?.displayName || 'User')}`} alt="My Status" className={clsx("w-14 h-14 rounded-full object-cover", myStatuses.length > 0 && "ring-2 ring-gray-300 dark:ring-gray-600 p-0.5")} />
             <div className="absolute bottom-0 right-0 bg-[#25D366] text-white rounded-full p-1.5 border-2 border-white dark:border-[#202c33] shadow-sm transform hover:scale-110 transition-transform" onClick={(e) => { e.stopPropagation(); setIsAddingStatus(true); }}>
               <Plus className="w-3.5 h-3.5" strokeWidth={3} />
             </div>
@@ -219,7 +219,7 @@ export default function StatusTab({ localUser, users, getDisplayName }: Props) {
                         className="transform -rotate-90 origin-center transition-colors duration-300"
                       />
                     </svg>
-                    <img src={u.photoURL} alt={getDisplayName ? getDisplayName(u) : u.displayName} className="w-14 h-14 rounded-full object-cover relative z-10 border-2 border-white dark:border-[#202c33]" />
+                    <img src={u?.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(getDisplayName ? getDisplayName(u) : u.displayName)}`} alt={getDisplayName ? getDisplayName(u) : u.displayName} className="w-14 h-14 rounded-full object-cover relative z-10 border-2 border-white dark:border-[#202c33]" />
                   </div>
                   <div className="flex-1">
                     <h3 className="font-bold text-gray-900 dark:text-gray-100 text-lg">{getDisplayName ? getDisplayName(u) : u.displayName}</h3>
@@ -324,7 +324,7 @@ export default function StatusTab({ localUser, users, getDisplayName }: Props) {
           <div className="absolute top-6 left-0 right-0 p-4 flex justify-between items-center z-20">
             <div className="flex items-center gap-3">
               <img 
-                src={currentStatus.userId === localUser.uid ? localUser.photoURL : users.find(u => u.uid === currentStatus.userId)?.photoURL} 
+                src={currentStatus.userId === localUser.uid ? (localUser?.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(localUser?.displayName || 'User')}`) : (users.find(u => u.uid === currentStatus.userId)?.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(users.find(u => u.uid === currentStatus.userId)?.displayName || 'User')}`)} 
                 className="w-10 h-10 rounded-full border-2 border-white/20 shadow-sm" 
                 alt="User"
               />

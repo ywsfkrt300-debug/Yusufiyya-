@@ -18,7 +18,7 @@ const IncomingCall: React.FC<IncomingCallProps> = ({ caller, call, onAccept, onR
       exit={{ y: -100, opacity: 0 }}
       className="fixed top-4 left-4 right-4 z-[110] bg-[#075e54] text-white p-4 rounded-2xl shadow-2xl flex items-center gap-4 border border-white/10 backdrop-blur-md"
     >
-      <img src={caller.photoURL} alt={caller.displayName} className="w-14 h-14 rounded-full object-cover border-2 border-[#25D366]" />
+      <img src={caller?.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(caller?.displayName || 'User')}`} alt={caller.displayName} className="w-14 h-14 rounded-full object-cover border-2 border-[#25D366]" />
       <div className="flex-1">
         <h3 className="font-bold text-lg">{caller.displayName}</h3>
         <p className="text-sm opacity-80 flex items-center gap-1.5">

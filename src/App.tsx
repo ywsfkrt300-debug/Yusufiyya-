@@ -1,12 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { db, auth } from './firebase';
-import { collection, doc, setDoc, getDoc, getDocs, onSnapshot, query, where, orderBy, addDoc, serverTimestamp, or, deleteDoc, updateDoc, arrayUnion, writeBatch } from 'firebase/firestore';
+import { collection, doc, setDoc, getDoc, getDocs, onSnapshot, query, where, orderBy, addDoc, serverTimestamp, or, deleteDoc, updateDoc, arrayUnion, writeBatch, increment, limit } from 'firebase/firestore';
 import { generateKeyPair, exportPublicKey, exportPrivateKey, encryptMessage, decryptMessage } from './lib/crypto';
 import { savePrivateKey, getPrivateKey } from './lib/idb';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import { format } from 'date-fns';
-import { MessageCircle, Send, Smile, Lock, Unlock, Phone, Video, Camera, Settings, CircleDashed, Users, Mic, Square, Trash2, MoreVertical, Play, Pause, Check, CheckCheck, User as UserIcon, Paperclip, File, Image as ImageIcon, Download, X } from 'lucide-react';
+import { MessageCircle, Send, Smile, Lock, Unlock, Phone, Video, Camera, Settings, CircleDashed, Users, Mic, Square, Trash2, MoreVertical, Play, Pause, Check, CheckCheck, User as UserIcon, Paperclip, File, Image as ImageIcon, Download, X, Pin, Search, BellOff, Bell } from 'lucide-react';
 import clsx from 'clsx';
 import { AnimatePresence } from 'motion/react';
 import AnimatedEmoji from './components/AnimatedEmoji';
@@ -15,7 +15,7 @@ import SettingsTab from './components/SettingsTab';
 import ImageCropperModal from './components/ImageCropperModal';
 import CallScreen from './components/CallScreen';
 import IncomingCall from './components/IncomingCall';
-import { UserProfile, Message, DecryptedMessage, Group, Call } from './types';
+import { UserProfile, Message, DecryptedMessage, Group, Call, Chat } from './types';
 
 const isEmojiOnly = (text: string) => {
   const emojiRegex = /^[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F900}-\u{1F9FF}\u{1F1E0}-\u{1F1FF}]+$/u;
@@ -168,12 +168,24 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [decryptedMessages, setDecryptedMessages] = useState<DecryptedMessage[]>([]);
+  const [chats, setChats] = useState<Chat[]>([]);
+  const chatsRef = useRef<Chat[]>([]);
+  
+  useEffect(() => {
+    chatsRef.current = chats;
+  }, [chats]);
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [newMessage, setNewMessage] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchFilter, setSearchFilter] = useState<'all' | 'unread' | 'media' | 'links' | 'docs'>('all');
+  const [searchDate, setSearchDate] = useState('');
+  const [searchResults, setSearchResults] = useState<Message[]>([]);
+  const [isSearchingMessages, setIsSearchingMessages] = useState(false);
+  const [sortOrder, setSortOrder] = useState<'recent' | 'unread' | 'pinned'>('recent');
   const [quotedMessage, setQuotedMessage] = useState<DecryptedMessage | null>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [selectedMessageIds, setSelectedMessageIds] = useState<string[]>([]);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -309,6 +321,50 @@ export default function App() {
     return user.displayName;
   };
 
+  // Advanced Search Effect
+  useEffect(() => {
+    if (!searchQuery || step !== 'main' || !localUser) {
+      setSearchResults([]);
+      setIsSearchingMessages(false);
+      return;
+    }
+    
+    setIsSearchingMessages(true);
+    const delayDebounceFn = setTimeout(async () => {
+      try {
+        const q1 = query(collection(db, 'messages'), where('receiverId', '==', localUser.uid), orderBy('timestamp', 'desc'), limit(500));
+        const q2 = query(collection(db, 'messages'), where('senderId', '==', localUser.uid), orderBy('timestamp', 'desc'), limit(500));
+        
+        const [snap1, snap2] = await Promise.all([getDocs(q1), getDocs(q2)]);
+        
+        const allMsgs = [...snap1.docs, ...snap2.docs].map(d => ({ id: d.id, ...d.data() } as Message));
+        
+        const filtered = allMsgs.filter(m => {
+          if (searchFilter === 'media' && m.type !== 'image' && m.type !== 'video') return false;
+          if (searchFilter === 'links' && !m.ciphertext.includes('http')) return false;
+          if (searchFilter === 'docs' && m.type !== 'file') return false;
+          
+          if (searchDate && m.timestamp) {
+            const msgDate = new Date(m.timestamp.toMillis()).toISOString().split('T')[0];
+            if (msgDate !== searchDate) return false;
+          }
+          
+          return m.ciphertext.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                 (m.fileName && m.fileName.toLowerCase().includes(searchQuery.toLowerCase()));
+        });
+        
+        const unique = Array.from(new Map(filtered.map(m => [m.id, m])).values());
+        setSearchResults(unique.sort((a, b) => (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0)));
+      } catch (error) {
+        console.error("Error searching messages:", error);
+      } finally {
+        setIsSearchingMessages(false);
+      }
+    }, 500);
+    
+    return () => clearTimeout(delayDebounceFn);
+  }, [searchQuery, searchFilter, searchDate, localUser, step]);
+
   // Fetch Users
   useEffect(() => {
     if (step !== 'main' || !localUser) return;
@@ -342,6 +398,28 @@ export default function App() {
       unsubscribe();
       clearInterval(interval);
     };
+  }, [step, localUser]);
+
+  // Fetch Chats
+  useEffect(() => {
+    if (step !== 'main' || !localUser) return;
+
+    const q = query(
+      collection(db, 'users', localUser.uid, 'chats'),
+      orderBy('timestamp', 'desc')
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const chatsList: Chat[] = [];
+      snapshot.forEach((doc) => {
+        chatsList.push(doc.data() as Chat);
+      });
+      setChats(chatsList);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, `users/${localUser.uid}/chats`);
+    });
+
+    return () => unsubscribe();
   }, [step, localUser]);
 
   // Fetch Unread Counts
@@ -455,13 +533,18 @@ export default function App() {
       setMessages(sortedMsgs);
       
       if (hasNewMessage) {
-        notificationSound.current.play().catch(e => console.log('Audio play failed:', e));
-        if (document.hidden && Notification.permission === 'granted') {
-           const title = selectedUser ? `رسالة من ${selectedUser.displayName}` : `رسالة في ${selectedGroup?.name}`;
-           new Notification(title, {
-             body: 'لديك رسالة جديدة',
-             icon: selectedUser?.photoURL || selectedGroup?.photoURL
-           });
+        const chatId = selectedUser ? selectedUser.uid : selectedGroup?.id;
+        const chat = chatsRef.current.find(c => c.id === chatId);
+        
+        if (!chat?.isMuted) {
+          notificationSound.current.play().catch(e => console.log('Audio play failed:', e));
+          if (document.hidden && Notification.permission === 'granted') {
+             const title = selectedUser ? `رسالة من ${selectedUser.displayName}` : `رسالة في ${selectedGroup?.name}`;
+             new Notification(title, {
+               body: 'لديك رسالة جديدة',
+               icon: selectedUser?.photoURL || selectedGroup?.photoURL
+             });
+          }
         }
       }
     }, (error) => {
@@ -590,6 +673,12 @@ export default function App() {
         password: password || undefined,
         privacy: {
           lastSeen: 'everyone',
+          online: 'everyone',
+          readReceipts: true,
+          typing: true,
+          recording: true,
+          groups: 'everyone',
+          profilePhoto: 'everyone',
           status: 'everyone'
         },
         customNames: {},
@@ -707,9 +796,13 @@ export default function App() {
       sentSound.current.play().catch(e => console.log('Audio play failed:', e));
 
       try {
-        await addDoc(collection(db, 'messages'), {
+        const batch = writeBatch(db);
+        const messageRef = doc(collection(db, 'messages'));
+        const receiverId = selectedUser ? selectedUser.uid : selectedGroup!.id;
+        
+        batch.set(messageRef, {
           senderId: localUser.uid,
-          receiverId: selectedUser ? selectedUser.uid : selectedGroup!.id,
+          receiverId: receiverId,
           senderAuthUid: authUid, // For security rules
           receiverAuthUid: selectedUser ? (selectedUser as any).authUid : null, // For security rules
           ciphertext,
@@ -724,6 +817,45 @@ export default function App() {
           read: false,
           quotedMessageId: quotedMessageId || null
         });
+
+        // Update sender's chat
+        const senderChatRef = doc(db, 'users', localUser.uid, 'chats', receiverId);
+        batch.set(senderChatRef, {
+          id: receiverId,
+          type: selectedUser ? 'user' : 'group',
+          lastMessage: type === 'text' ? content : (type === 'audio' ? 'رسالة صوتية' : (type === 'image' ? 'صورة' : 'ملف')),
+          lastMessageType: type,
+          timestamp: serverTimestamp(),
+        }, { merge: true });
+
+        // Update receiver's chat
+        if (selectedUser) {
+          const receiverChatRef = doc(db, 'users', receiverId, 'chats', localUser.uid);
+          batch.set(receiverChatRef, {
+            id: localUser.uid,
+            type: 'user',
+            lastMessage: type === 'text' ? content : (type === 'audio' ? 'رسالة صوتية' : (type === 'image' ? 'صورة' : 'ملف')),
+            lastMessageType: type,
+            timestamp: serverTimestamp(),
+            unreadCount: increment(1)
+          }, { merge: true });
+        } else if (selectedGroup) {
+          selectedGroup.members.forEach(memberId => {
+            if (memberId !== localUser.uid) {
+              const memberChatRef = doc(db, 'users', memberId, 'chats', selectedGroup.id);
+              batch.set(memberChatRef, {
+                id: selectedGroup.id,
+                type: 'group',
+                lastMessage: type === 'text' ? content : (type === 'audio' ? 'رسالة صوتية' : (type === 'image' ? 'صورة' : 'ملف')),
+                lastMessageType: type,
+                timestamp: serverTimestamp(),
+                unreadCount: increment(1)
+              }, { merge: true });
+            }
+          });
+        }
+
+        await batch.commit();
       } catch (error) {
         handleFirestoreError(error, OperationType.CREATE, 'messages');
       }
@@ -738,8 +870,21 @@ export default function App() {
     const textToSend = newMessage;
     setNewMessage('');
     setShowEmojiPicker(false);
-    await sendMessage(textToSend, 'text', quotedMessage?.id);
-    setQuotedMessage(null);
+
+    if (editingMessageId) {
+      try {
+        await updateDoc(doc(db, 'messages', editingMessageId), {
+          ciphertext: textToSend,
+          isEdited: true
+        });
+        setEditingMessageId(null);
+      } catch (error) {
+        handleFirestoreError(error, OperationType.UPDATE, 'messages');
+      }
+    } else {
+      await sendMessage(textToSend, 'text', quotedMessage?.id);
+      setQuotedMessage(null);
+    }
   };
 
   const handleStartRecording = async () => {
@@ -1012,6 +1157,86 @@ export default function App() {
     );
   }
 
+  interface ChatListItem {
+    id: string;
+    type: 'user' | 'group';
+    data: UserProfile | Group;
+    lastMessage?: string;
+    lastMessageType?: 'text' | 'audio' | 'image' | 'file';
+    timestamp: number;
+    unreadCount: number;
+    isPinned: boolean;
+  }
+
+  const chatListItems = useMemo(() => {
+    const items: ChatListItem[] = [];
+    
+    // Add groups
+    groups.forEach(g => {
+      const chatData = chats.find(c => c.id === g.id && c.type === 'group');
+      items.push({
+        id: g.id,
+        type: 'group',
+        data: g,
+        lastMessage: chatData?.lastMessage,
+        lastMessageType: chatData?.lastMessageType,
+        timestamp: chatData?.timestamp?.toMillis() || 0,
+        unreadCount: unreadCounts[g.id] || 0,
+        isPinned: localUser?.pinnedChats?.includes(g.id) || false
+      });
+    });
+
+    // Add users
+    users.forEach(u => {
+      const chatData = chats.find(c => c.id === u.uid && c.type === 'user');
+      items.push({
+        id: u.uid,
+        type: 'user',
+        data: u,
+        lastMessage: chatData?.lastMessage,
+        lastMessageType: chatData?.lastMessageType,
+        timestamp: chatData?.timestamp?.toMillis() || 0,
+        unreadCount: unreadCounts[u.uid] || 0,
+        isPinned: localUser?.pinnedChats?.includes(u.uid) || false
+      });
+    });
+
+    // Filter by search query
+    let result = items.filter(item => {
+      const name = item.type === 'user' ? getDisplayName(item.data as UserProfile) : (item.data as Group).name;
+      return name.toLowerCase().includes(searchQuery.toLowerCase());
+    });
+
+    // Filter by locked chats
+    if (isLockedChatsVisible) {
+      result = result.filter(item => localUser?.lockedChats?.includes(item.id));
+    } else {
+      result = result.filter(item => !localUser?.lockedChats?.includes(item.id));
+    }
+
+    // Filter by search filter
+    if (searchFilter === 'unread') {
+      result = result.filter(item => item.unreadCount > 0);
+    } else if (searchFilter !== 'all') {
+      result = [];
+    }
+
+    // Sort
+    result.sort((a, b) => {
+      if (sortOrder === 'pinned') {
+        if (a.isPinned && !b.isPinned) return -1;
+        if (!a.isPinned && b.isPinned) return 1;
+      } else if (sortOrder === 'unread') {
+        if (a.unreadCount > 0 && b.unreadCount === 0) return -1;
+        if (a.unreadCount === 0 && b.unreadCount > 0) return 1;
+      }
+      // Default sort by timestamp
+      return b.timestamp - a.timestamp;
+    });
+
+    return result;
+  }, [users, groups, chats, searchQuery, isLockedChatsVisible, localUser?.lockedChats, localUser?.pinnedChats, searchFilter, sortOrder, unreadCounts]);
+
   return (
     <div className="flex h-screen bg-[#ece5dd] overflow-hidden font-sans" dir="rtl">
       {/* Sidebar / Tabs Area */}
@@ -1034,7 +1259,7 @@ export default function App() {
             <button onClick={() => setIsCreatingGroup(true)} className="p-2 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full">
               <Users className="w-6 h-6" />
             </button>
-            <img src={localUser?.photoURL} alt="Profile" className="w-10 h-10 rounded-full object-cover border-2 border-[#25D366]" />
+            <img src={localUser?.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(localUser?.displayName || 'User')}`} alt="Profile" className="w-10 h-10 rounded-full object-cover border-2 border-[#25D366]" />
           </div>
         </div>
 
@@ -1057,7 +1282,7 @@ export default function App() {
                     setSelectedMembers(prev => prev.includes(u.uid) ? prev.filter(id => id !== u.uid) : [...prev, u.uid]);
                   }}>
                     <input type="checkbox" checked={selectedMembers.includes(u.uid)} readOnly />
-                    <img src={u.photoURL} className="w-8 h-8 rounded-full" />
+                    <img src={u?.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(getDisplayName(u))}`} className="w-8 h-8 rounded-full" />
                     <span className="text-gray-900 dark:text-gray-100">{getDisplayName(u)}</span>
                   </div>
                 ))}
@@ -1070,81 +1295,224 @@ export default function App() {
           ) : (
             <div className="flex-1 overflow-y-auto bg-white dark:bg-[#111b21]">
               <div className="p-4 border-b border-gray-200 dark:border-gray-800">
-                <input
-                  type="text"
-                  placeholder="بحث..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full bg-gray-100 dark:bg-[#202c33] text-gray-900 dark:text-gray-100 rounded-lg px-4 py-2 focus:outline-none"
-                />
+                <div className="relative">
+                  <input
+                    type="text"
+                    placeholder="بحث في يوسفيات..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full bg-gray-100 dark:bg-[#202c33] text-gray-900 dark:text-gray-100 rounded-full pl-10 pr-4 py-2 focus:outline-none focus:ring-2 focus:ring-[#25D366]/50 transition-all"
+                  />
+                  <Search className="w-5 h-5 text-gray-500 absolute left-3 top-2.5" />
+                </div>
+                
+                {/* Advanced Search Filters */}
+                <div className="flex gap-2 mt-3 overflow-x-auto pb-1 scrollbar-hide items-center">
+                  {['all', 'unread', 'media', 'links', 'docs'].map((filter) => (
+                    <button
+                      key={filter}
+                      onClick={() => setSearchFilter(filter as any)}
+                      className={clsx(
+                        "px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all",
+                        searchFilter === filter 
+                          ? "bg-[#25D366] text-white shadow-md" 
+                          : "bg-gray-100 dark:bg-[#202c33] text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700"
+                      )}
+                    >
+                      {filter === 'all' && 'الكل'}
+                      {filter === 'unread' && 'غير مقروءة'}
+                      {filter === 'media' && 'صور وفيديو'}
+                      {filter === 'links' && 'روابط'}
+                      {filter === 'docs' && 'ملفات'}
+                    </button>
+                  ))}
+                  <input 
+                    type="date" 
+                    value={searchDate}
+                    onChange={(e) => setSearchDate(e.target.value)}
+                    className="px-3 py-1.5 rounded-full text-sm font-medium bg-gray-100 dark:bg-[#202c33] text-gray-600 dark:text-gray-300 focus:outline-none focus:ring-2 focus:ring-[#25D366]/50"
+                  />
+                </div>
               </div>
-            {users.filter(u => getDisplayName(u).toLowerCase().includes(searchQuery.toLowerCase())).length === 0 && groups.filter(g => g.name.toLowerCase().includes(searchQuery.toLowerCase())).length === 0 ? (
+              
+              {/* Sort Options */}
+              {!searchQuery && (
+                <div className="px-4 py-2 flex justify-between items-center bg-gray-50 dark:bg-[#111b21] border-b border-gray-100 dark:border-gray-800/50">
+                  <span className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">المحادثات</span>
+                  <div className="flex gap-3">
+                    <button onClick={() => setSortOrder('recent')} className={clsx("text-xs font-medium transition-colors", sortOrder === 'recent' ? "text-[#25D366]" : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300")}>الأحدث</button>
+                    <button onClick={() => setSortOrder('unread')} className={clsx("text-xs font-medium transition-colors", sortOrder === 'unread' ? "text-[#25D366]" : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300")}>غير المقروءة</button>
+                    <button onClick={() => setSortOrder('pinned')} className={clsx("text-xs font-medium transition-colors", sortOrder === 'pinned' ? "text-[#25D366]" : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300")}>المثبتة</button>
+                  </div>
+                </div>
+              )}
+              
+              {searchQuery && (
+                <div className="px-4 py-2 bg-gray-50 dark:bg-[#111b21] border-b border-gray-100 dark:border-gray-800/50">
+                  <span className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">المحادثات ({chatListItems.length})</span>
+                </div>
+              )}
+              
+            {chatListItems.length === 0 && !searchQuery ? (
               <div className="p-8 text-center text-gray-500 dark:text-gray-400 flex flex-col items-center justify-center h-full">
                 <div className="bg-gray-100 dark:bg-gray-800 p-6 rounded-full mb-4">
                   <Users className="w-12 h-12 text-gray-400 dark:text-gray-500" />
                 </div>
-                <p className="text-lg font-medium text-gray-700 dark:text-gray-300">لا يوجد مستخدمين أو مجموعات بهذا الاسم.</p>
+                <p className="text-lg font-medium text-gray-700 dark:text-gray-300">لا يوجد محادثات مطابقة.</p>
               </div>
             ) : (
               <>
-                {groups.filter(g => g.name.toLowerCase().includes(searchQuery.toLowerCase())).filter(g => isLockedChatsVisible ? localUser?.lockedChats?.includes(g.id) : !localUser?.lockedChats?.includes(g.id)).map(g => (
-                  <div 
-                    key={g.id} 
-                    onClick={() => { setSelectedGroup(g); setSelectedUser(null); }}
-                    className={clsx(
-                      "flex items-center gap-4 p-4 cursor-pointer border-b border-gray-100 dark:border-gray-800/50 hover:bg-gray-50 dark:hover:bg-[#202c33] transition-all duration-200 group",
-                      selectedGroup?.id === g.id && "bg-gray-100 dark:bg-[#2a3942]"
-                    )}
-                  >
-                    <div className="relative">
-                      <img src={g.photoURL} alt={g.name} className="w-14 h-14 rounded-full object-cover" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <h3 className="font-bold text-gray-900 dark:text-gray-100 text-lg truncate">{g.name}</h3>
-                      <p className="text-sm text-gray-500 dark:text-gray-400 truncate font-medium">مجموعة</p>
-                    </div>
-                    <button 
-                      onClick={(e) => handleDeleteChat(e, g.id, true)}
-                      className="p-2 text-gray-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
-                    >
-                      <Trash2 className="w-5 h-5" />
-                    </button>
-                  </div>
-                ))}
-                {users.filter(u => getDisplayName(u).toLowerCase().includes(searchQuery.toLowerCase())).filter(u => isLockedChatsVisible ? localUser?.lockedChats?.includes(u.uid) : !localUser?.lockedChats?.includes(u.uid)).map(u => (
-                  <div 
-                    key={u.uid} 
-                    onClick={() => { setSelectedUser(u); setSelectedGroup(null); }}
-                    className={clsx(
-                      "flex items-center gap-4 p-4 cursor-pointer border-b border-gray-100 dark:border-gray-800/50 hover:bg-gray-50 dark:hover:bg-[#202c33] transition-all duration-200 group",
-                      selectedUser?.uid === u.uid && "bg-gray-100 dark:bg-[#2a3942]"
-                    )}
-                  >
-                    <div className="relative">
-                      <img src={u.photoURL} alt={getDisplayName(u)} className="w-14 h-14 rounded-full object-cover" />
-                      {u.privacy?.status !== 'nobody' && (
-                        <div className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-[#25D366] border-2 border-white dark:border-[#111b21] rounded-full"></div>
+                {chatListItems.map(item => {
+                  const isUser = item.type === 'user';
+                  const u = isUser ? item.data as UserProfile : null;
+                  const g = !isUser ? item.data as Group : null;
+                  const name = isUser ? getDisplayName(u!) : g!.name;
+                  const photoURL = isUser ? u?.photoURL : g?.photoURL;
+                  const isSelected = isUser ? selectedUser?.uid === u!.uid : selectedGroup?.id === g!.id;
+                  
+                  return (
+                    <div 
+                      key={item.id} 
+                      onClick={() => { 
+                        if (isUser) {
+                          setSelectedUser(u); setSelectedGroup(null); 
+                        } else {
+                          setSelectedGroup(g); setSelectedUser(null);
+                        }
+                      }}
+                      className={clsx(
+                        "flex items-center gap-4 p-4 cursor-pointer border-b border-gray-100 dark:border-gray-800/50 hover:bg-gray-50 dark:hover:bg-[#202c33] transition-all duration-200 group",
+                        isSelected && "bg-gray-100 dark:bg-[#2a3942]",
+                        item.isPinned && "bg-blue-50/30 dark:bg-blue-900/10"
                       )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex justify-between items-center mb-1">
-                        <h3 className="font-bold text-gray-900 dark:text-gray-100 text-lg truncate">{getDisplayName(u)}</h3>
-                        {unreadCounts[u.uid] > 0 && (
-                          <span className="bg-[#25D366] text-white text-xs font-bold px-2 py-1 rounded-full shadow-sm">
-                            {unreadCounts[u.uid]}
-                          </span>
+                    >
+                      <div className="relative">
+                        <img src={photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}`} alt={name} className="w-[60px] h-[60px] rounded-full object-cover border-2 border-transparent group-hover:border-[#25D366] transition-colors" />
+                        {isUser && u?.privacy?.status !== 'nobody' && (
+                          <div className="absolute bottom-0 right-0 w-4 h-4 bg-[#25D366] border-2 border-white dark:border-[#111b21] rounded-full"></div>
                         )}
                       </div>
-                      <p className="text-sm text-gray-500 dark:text-gray-400 truncate font-medium" dir="ltr">{u.phoneNumber}</p>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex justify-between items-center mb-1">
+                          <h3 className="font-bold text-gray-900 dark:text-gray-100 text-lg truncate flex items-center gap-2">
+                            {name}
+                            {item.isMuted && <BellOff className="w-3.5 h-3.5 text-gray-400" />}
+                            {item.isPinned && <Pin className="w-3.5 h-3.5 text-gray-400" />}
+                          </h3>
+                          <div className="flex flex-col items-end gap-1">
+                            {item.timestamp > 0 && (
+                              <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">
+                                {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                            )}
+                            {item.unreadCount > 0 && (
+                              <span className="bg-[#25D366] text-white text-xs font-bold w-5 h-5 flex items-center justify-center rounded-full shadow-sm">
+                                {item.unreadCount}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <p className="text-sm text-gray-500 dark:text-gray-400 truncate font-medium flex items-center gap-1" dir="auto">
+                          {item.lastMessageType === 'image' && <ImageIcon className="w-4 h-4 inline" />}
+                          {item.lastMessageType === 'audio' && <Mic className="w-4 h-4 inline" />}
+                          {item.lastMessageType === 'file' && <File className="w-4 h-4 inline" />}
+                          {item.lastMessage || (isUser ? u!.phoneNumber : 'مجموعة')}
+                        </p>
+                      </div>
+                      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const newMuted = !item.isMuted;
+                            updateDoc(doc(db, 'users', localUser!.uid, 'chats', item.id), { isMuted: newMuted });
+                          }}
+                          className="p-2 text-gray-400 hover:text-orange-500 transition-colors"
+                          title={item.isMuted ? "إلغاء الكتم" : "كتم"}
+                        >
+                          {item.isMuted ? <Bell className="w-5 h-5 text-orange-500" /> : <BellOff className="w-5 h-5" />}
+                        </button>
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const isPinned = localUser?.pinnedChats?.includes(item.id);
+                            const newPinned = isPinned 
+                              ? (localUser?.pinnedChats || []).filter(id => id !== item.id)
+                              : [...(localUser?.pinnedChats || []), item.id];
+                            updateDoc(doc(db, 'users', localUser!.uid), { pinnedChats: newPinned });
+                          }}
+                          className="p-2 text-gray-400 hover:text-[#25D366] transition-colors"
+                          title={item.isPinned ? "إلغاء التثبيت" : "تثبيت"}
+                        >
+                          <Pin className={clsx("w-5 h-5", item.isPinned && "fill-current text-[#25D366]")} />
+                        </button>
+                        <button 
+                          onClick={(e) => handleDeleteChat(e, item.id, !isUser)}
+                          className="p-2 text-gray-400 hover:text-red-500 transition-colors"
+                          title="حذف"
+                        >
+                          <Trash2 className="w-5 h-5" />
+                        </button>
+                      </div>
                     </div>
-                    <button 
-                      onClick={(e) => handleDeleteChat(e, u.uid, false)}
-                      className="p-2 text-gray-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+                  );
+                })}
+              </>
+            )}
+
+            {searchQuery && (
+              <>
+                <div className="px-4 py-2 bg-gray-50 dark:bg-[#111b21] border-b border-gray-100 dark:border-gray-800/50 mt-2">
+                  <span className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    الرسائل {isSearchingMessages ? '...' : `(${searchResults.length})`}
+                  </span>
+                </div>
+                {searchResults.map(msg => {
+                  const isSentByMe = msg.senderId === localUser?.uid;
+                  const otherUserId = isSentByMe ? msg.receiverId : msg.senderId;
+                  const otherUser = users.find(u => u.uid === otherUserId);
+                  const group = groups.find(g => g.id === msg.receiverId);
+                  const name = group ? group.name : (otherUser ? getDisplayName(otherUser) : 'مستخدم');
+                  const photoURL = group ? group.photoURL : otherUser?.photoURL;
+                  
+                  return (
+                    <div 
+                      key={msg.id} 
+                      onClick={() => { 
+                        if (group) {
+                          setSelectedGroup(group); setSelectedUser(null); 
+                        } else if (otherUser) {
+                          setSelectedUser(otherUser); setSelectedGroup(null);
+                        }
+                      }}
+                      className="flex items-center gap-4 p-4 cursor-pointer border-b border-gray-100 dark:border-gray-800/50 hover:bg-gray-50 dark:hover:bg-[#202c33] transition-all duration-200 group"
                     >
-                      <Trash2 className="w-5 h-5" />
-                    </button>
+                      <img src={photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}`} alt={name} className="w-[50px] h-[50px] rounded-full object-cover" />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex justify-between items-center mb-1">
+                          <h3 className="font-bold text-gray-900 dark:text-gray-100 text-md truncate">
+                            {name}
+                          </h3>
+                          {msg.timestamp && (
+                            <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">
+                              {new Date(msg.timestamp.toMillis()).toLocaleDateString()}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-sm text-gray-600 dark:text-gray-300 truncate" dir="auto">
+                          {msg.type === 'image' && <ImageIcon className="w-4 h-4 inline ml-1" />}
+                          {msg.type === 'audio' && <Mic className="w-4 h-4 inline ml-1" />}
+                          {msg.type === 'file' && <File className="w-4 h-4 inline ml-1" />}
+                          {msg.ciphertext}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+                {searchResults.length === 0 && !isSearchingMessages && (
+                  <div className="p-4 text-center text-gray-500 dark:text-gray-400 text-sm">
+                    لا توجد رسائل مطابقة.
                   </div>
-                ))}
+                )}
               </>
             )}
           </div>
@@ -1204,6 +1572,23 @@ export default function App() {
                 </button>
                 <span className="flex-1 font-bold text-lg">{selectedMessageIds.length}</span>
                 <div className="flex items-center gap-2">
+                  {selectedMessageIds.length === 1 && decryptedMessages.find(m => m.id === selectedMessageIds[0])?.senderId === localUser?.uid && decryptedMessages.find(m => m.id === selectedMessageIds[0])?.type === 'text' && (
+                    <button 
+                      onClick={() => {
+                        const msg = decryptedMessages.find(m => m.id === selectedMessageIds[0]);
+                        if (msg) {
+                          setEditingMessageId(msg.id);
+                          setNewMessage(msg.text);
+                        }
+                        setIsSelectionMode(false);
+                        setSelectedMessageIds([]);
+                      }}
+                      className="p-2 hover:bg-white/10 rounded-full transition"
+                      title="تعديل"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-6 h-6"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+                    </button>
+                  )}
                   {selectedMessageIds.length === 1 && (
                     <button 
                       onClick={() => {
@@ -1241,7 +1626,7 @@ export default function App() {
                 <button className="md:hidden text-gray-600 dark:text-gray-300 p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full transition" onClick={() => { setSelectedUser(null); setSelectedGroup(null); }}>
                   &rarr;
                 </button>
-                <img src={selectedUser ? selectedUser.photoURL : selectedGroup!.photoURL} alt={selectedUser ? getDisplayName(selectedUser) : selectedGroup!.name} className="w-12 h-12 rounded-full object-cover border border-gray-200 dark:border-gray-600" />
+                <img src={selectedUser ? (selectedUser?.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(getDisplayName(selectedUser))}`) : (selectedGroup?.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(selectedGroup!.name)}`)} alt={selectedUser ? getDisplayName(selectedUser) : selectedGroup!.name} className="w-12 h-12 rounded-full object-cover border border-gray-200 dark:border-gray-600" />
                 <div className="flex-1">
                   {editingContactId === selectedUser.uid ? (
                     <div className="flex items-center gap-2">
@@ -1403,6 +1788,7 @@ export default function App() {
                           <p className="text-gray-900 dark:text-gray-100 text-[16px] leading-relaxed break-words whitespace-pre-wrap">{msg.text}</p>
                         )}
                         <div className="text-[11px] text-gray-500 dark:text-gray-400 text-left mt-1.5 flex justify-end items-center gap-1.5 font-medium">
+                          {msg.isEdited && <span className="italic">تم التعديل</span>}
                           <span>{msg.timestamp ? format(msg.timestamp.toDate(), 'HH:mm') : '...'}</span>
                           {isMe && (
                             <CheckCheck className={clsx("w-4 h-4", msg.read ? "text-[#53bdeb]" : "text-gray-400")} />
@@ -1418,6 +1804,17 @@ export default function App() {
 
             {/* Input Area */}
             <div className="bg-[#f0f2f5] dark:bg-[#202c33] p-3 flex flex-col gap-2 relative z-20 border-t border-gray-200 dark:border-gray-700 shadow-sm">
+              {editingMessageId && (
+                <div className="bg-white dark:bg-[#111b21] p-2 rounded-lg border-l-4 border-blue-500 flex justify-between items-center text-sm shadow-sm">
+                  <div className="truncate">
+                    <p className="font-bold text-blue-500 text-xs">تعديل الرسالة:</p>
+                    <p className="text-gray-700 dark:text-gray-300 truncate">{decryptedMessages.find(m => m.id === editingMessageId)?.text}</p>
+                  </div>
+                  <button onClick={() => { setEditingMessageId(null); setNewMessage(''); }} className="text-gray-500 hover:text-gray-700">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
               {quotedMessage && (
                 <div className="bg-white dark:bg-[#111b21] p-2 rounded-lg border-l-4 border-[#25D366] flex justify-between items-center text-sm shadow-sm">
                   <div className="truncate">

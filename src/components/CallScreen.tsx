@@ -184,7 +184,7 @@ const CallScreen: React.FC<CallScreenProps> = ({ localUser, remoteUser, call, on
       {/* User Info Overlay */}
       <div className="relative z-10 flex flex-col items-center gap-4 mb-12">
         <img 
-          src={remoteUser.photoURL} 
+          src={remoteUser?.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(remoteUser?.displayName || 'User')}`} 
           alt={remoteUser.displayName} 
           className={clsx(
             "w-32 h-32 rounded-full object-cover border-4 border-[#25D366] shadow-2xl",

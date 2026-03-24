@@ -166,7 +166,7 @@ export default function SettingsTab({ localUser, setLocalUser, onLogout, onDelet
           <div className="relative">
             <div className="absolute inset-0 bg-gradient-to-tr from-[#25D366] to-[#128C7E] rounded-full blur-md opacity-40 group-hover:opacity-60 transition-opacity duration-300"></div>
             <img 
-              src={localUser.photoURL} 
+              src={localUser?.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(localUser?.displayName || 'User')}`} 
               alt="Profile" 
               className="w-36 h-36 rounded-full object-cover border-4 border-white dark:border-[#202c33] shadow-xl relative z-10 transition-transform duration-300 group-hover:scale-[1.02]" 
             />
